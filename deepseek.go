@@ -74,30 +74,45 @@ func (l *LLM) Chat(messages []Msg, tools []ToolDef) (*Msg, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest("POST", l.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
+	// Inference providers 429/503 under load routinely — retry with backoff
+	// instead of surfacing a transient blip to the channel.
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt*attempt) * 2 * time.Second) // 2s, 8s, 18s
+		}
+		req, err := http.NewRequest("POST", l.baseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+l.key)
+		resp, err := l.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue // network blip
+		}
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("provider %d: %.200s", resp.StatusCode, raw)
+			continue
+		}
+		var out chatResponse
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return nil, fmt.Errorf("bad response (%d): %.200s", resp.StatusCode, raw)
+		}
+		if out.Error != nil {
+			return nil, fmt.Errorf("api: %s", out.Error.Message)
+		}
+		if len(out.Choices) == 0 {
+			return nil, fmt.Errorf("empty response (%d)", resp.StatusCode)
+		}
+		return &out.Choices[0].Message, nil
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+l.key)
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, err
-	}
-	var out chatResponse
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("bad response (%d): %.200s", resp.StatusCode, raw)
-	}
-	if out.Error != nil {
-		return nil, fmt.Errorf("api: %s", out.Error.Message)
-	}
-	if len(out.Choices) == 0 {
-		return nil, fmt.Errorf("empty response (%d)", resp.StatusCode)
-	}
-	return &out.Choices[0].Message, nil
+	return nil, fmt.Errorf("provider unavailable after retries: %w", lastErr)
 }

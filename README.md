@@ -70,6 +70,21 @@ requirement, so you can dev on a laptop with the same env file.
 
 ## Using it
 
+### /dive — the deep-loop skill
+
+For anything that deserves more than a quick answer:
+
+> **/dive** task: compare the latest DeepSeek release against GPT on coding benchmarks — real numbers with dates
+
+`/dive` runs the looper protocol: state the goal and acceptance criteria,
+work with a doubled tool budget (16 tool calls), then **self-review** — the
+model re-reads its own answer against the criteria and repairs it before you
+see it (`NANOCLAW_DIVE_PASSES`, default 2). The economics are the point: a
+cheap model looped twice with a clear goal beats one expensive shot, at a
+fraction of the cost.
+
+### Mentions — quick turns
+
 > **@nanoclaw** mock up a landing page for a TCG price-alert app — dark, one CTA
 
 → replies with the reasoning and attaches `landing.html`, self-contained,

@@ -94,6 +94,45 @@ func TestAgentToolBudget(t *testing.T) {
 	}
 }
 
+// /dive: the self-review pass must re-prompt with the critique and adopt
+// the repaired answer.
+func TestDiveSelfReviewPass(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		calls++
+		if calls == 1 {
+			if !strings.Contains(req.Messages[len(req.Messages)-1].Content, "DIVE") {
+				t.Errorf("dive marker missing from user message")
+			}
+			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"draft answer"}}]}`))
+			return
+		}
+		last := req.Messages[len(req.Messages)-1]
+		if !strings.Contains(last.Content, "Review your answer") {
+			t.Errorf("critique prompt missing on pass 2, got %.60q", last.Content)
+		}
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"repaired answer"}}]}`))
+	}))
+	defer srv.Close()
+	cfg := testCfg(t)
+	cfg.DeepseekURL = srv.URL
+	cfg.DiveToolIters, cfg.DivePasses = 16, 2
+	r := NewAgent(cfg).Dive("c", "wren", "benchmark rundown")
+	if r.Text != "repaired answer" {
+		t.Fatalf("expected repaired answer, got %q", r.Text)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 passes, got %d", calls)
+	}
+	// history keeps the FINAL answer only
+	h := NewHistory(cfg).Get("c")
+	if len(h) != 2 || h[1].Content != "repaired answer" {
+		t.Fatalf("history should hold the final answer: %+v", h)
+	}
+}
+
 func TestSplitMessage(t *testing.T) {
 	long := strings.Repeat("line one\n", 500) // 4500 chars
 	chunks := splitMessage(long, 1990)

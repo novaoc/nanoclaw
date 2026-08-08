@@ -4,8 +4,16 @@ import (
 	"bufio"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 )
+
+func atoiOr(s string, def int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n >= 1 && n <= 5 {
+		return n
+	}
+	return def
+}
 
 type Config struct {
 	DiscordToken  string
@@ -16,6 +24,8 @@ type Config struct {
 	FocusChannels map[string]bool // channel IDs answered without a mention
 	MaxToolIters  int
 	HistoryTurns  int
+	DiveToolIters int // /dive gets a bigger tool budget…
+	DivePasses    int // …and N self-review passes (the looper-model play)
 }
 
 // LoadConfig reads /etc/nanoclaw.env then ./nanoclaw.env (later wins),
@@ -58,6 +68,8 @@ func LoadConfig() (*Config, error) {
 		FocusChannels: map[string]bool{},
 		MaxToolIters:  8,
 		HistoryTurns:  24,
+		DiveToolIters: 16,
+		DivePasses:    atoiOr(get("NANOCLAW_DIVE_PASSES", ""), 2),
 	}
 	for _, id := range strings.Split(get("FOCUS_CHANNELS", ""), ",") {
 		if id = strings.TrimSpace(id); id != "" {

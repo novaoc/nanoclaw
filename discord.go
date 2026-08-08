@@ -27,7 +27,68 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 		discordgo.IntentsDirectMessages
 	b := &Bot{cfg: cfg, agent: agent, session: s, locks: make(chan struct{}, 2)}
 	s.AddHandler(b.onMessage)
+	s.AddHandler(b.onReady)
+	s.AddHandler(b.onInteraction)
 	return b, nil
+}
+
+// /dive — the deep-loop skill: clear goal, bigger tool budget, self-review
+// passes. Registered per guild so it appears instantly (global takes ~1h).
+func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
+	cmd := &discordgo.ApplicationCommand{
+		Name:        "dive",
+		Description: "Deep loop on a task or research question — goal, iterate, self-review",
+		Options: []*discordgo.ApplicationCommandOption{{
+			Type:        discordgo.ApplicationCommandOptionString,
+			Name:        "task",
+			Description: "What to dive on (a build task, a research question, a mockup)",
+			Required:    true,
+		}},
+	}
+	for _, g := range r.Guilds {
+		if _, err := s.ApplicationCommandCreate(s.State.User.ID, g.ID, cmd); err != nil {
+			log.Printf("register /dive in %s: %v", g.ID, err)
+		}
+	}
+}
+
+func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type != discordgo.InteractionApplicationCommand || i.ApplicationCommandData().Name != "dive" {
+		return
+	}
+	task := i.ApplicationCommandData().Options[0].StringValue()
+	author := "someone"
+	if i.Member != nil && i.Member.User != nil {
+		author = i.Member.User.Username
+	} else if i.User != nil {
+		author = i.User.Username
+	}
+	// dives run long — defer now, follow up when the loop lands
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	})
+	go func() {
+		b.locks <- struct{}{}
+		defer func() { <-b.locks }()
+		reply := b.agent.Dive(i.ChannelID, author, task)
+		chunks := splitMessage("🌀 **dive**: "+task+"\n\n"+reply.Text, 1990)
+		for n, chunk := range chunks {
+			params := &discordgo.WebhookParams{Content: chunk}
+			if n == len(chunks)-1 {
+				for _, p := range reply.Artifacts {
+					f, err := os.Open(p)
+					if err != nil {
+						continue
+					}
+					defer f.Close()
+					params.Files = append(params.Files, &discordgo.File{Name: artifactName(p), Reader: f})
+				}
+			}
+			if _, err := s.FollowupMessageCreate(i.Interaction, true, params); err != nil {
+				log.Printf("dive followup: %v", err)
+			}
+		}
+	}()
 }
 
 func (b *Bot) Start() error { return b.session.Open() }

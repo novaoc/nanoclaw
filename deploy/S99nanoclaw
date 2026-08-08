@@ -1,0 +1,27 @@
+#!/bin/sh
+# SysVinit service for the stock LicheeRV Nano buildroot image.
+# Install: cp to /etc/init.d/S99nanoclaw && chmod +x /etc/init.d/S99nanoclaw
+# Binary at /root/nanoclaw, config at /etc/nanoclaw.env, data on the SD.
+
+DAEMON=/root/nanoclaw
+LOG=/root/nanoclaw.log
+PIDFILE=/var/run/nanoclaw.pid
+
+start() {
+    printf "Starting nanoclaw: "
+    start-stop-daemon -S -b -m -p "$PIDFILE" --exec /bin/sh -- -c \
+        "exec $DAEMON >> $LOG 2>&1"
+    echo "OK"
+}
+stop() {
+    printf "Stopping nanoclaw: "
+    start-stop-daemon -K -p "$PIDFILE"
+    echo "OK"
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 1; start ;;
+    *) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac

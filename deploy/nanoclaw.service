@@ -1,0 +1,17 @@
+# systemd unit — for LicheeRV Nano images that ship systemd (e.g. Debian/sd).
+# Install: cp to /etc/systemd/system/ && systemctl enable --now nanoclaw
+[Unit]
+Description=nanoclaw pocket AI agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/root/nanoclaw
+WorkingDirectory=/root
+Restart=always
+RestartSec=10
+# 256 MB board — keep the agent honest
+MemoryMax=180M
+
+[Install]
+WantedBy=multi-user.target

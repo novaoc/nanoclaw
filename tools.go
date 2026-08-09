@@ -99,8 +99,8 @@ func toolDefs(cfg *Config) []ToolDef {
 		defs = append(defs, mk("moderate",
 			"Discord moderation — ONLY act on an explicit request from an authorized moderator. action=timeout|kick|ban|delete|slowmode. "+
 				"user=<@mention/id/username> for timeout/kick/ban; duration like '10m'/'1h'/'1d' for timeout; reason is logged; "+
-				"delete removes a specific message (message=<id> in the current channel); slowmode sets per-user seconds (0 clears) on the current channel. Always state what you did and why.",
-			`{"type":"object","properties":{"action":{"type":"string","description":"timeout|kick|ban|delete|slowmode"},"user":{"type":"string"},"duration":{"type":"string","description":"timeout length e.g. 10m, 1h, 1d"},"reason":{"type":"string"},"message":{"type":"string","description":"message id to delete"},"days":{"type":"integer","description":"slowmode seconds, or ban message-delete days"}},"required":["action"]}`))
+				"delete removes a specific message (message=<id> in the current channel); slowmode sets per-user seconds (seconds=0 clears) on the current channel. Always state what you did and why.",
+			`{"type":"object","properties":{"action":{"type":"string","description":"timeout|kick|ban|delete|slowmode"},"user":{"type":"string"},"duration":{"type":"string","description":"timeout length e.g. 10m, 1h, 1d"},"reason":{"type":"string"},"message":{"type":"string","description":"message id to delete"},"seconds":{"type":"integer","description":"slowmode: per-user seconds (0 clears)"},"days":{"type":"integer","description":"ban: how many days of the user's messages to delete"}},"required":["action"]}`))
 	}
 	if cfg.GithubEnabled() { // API only — no shell; gated by NANOCLAW_REPO_USERS (empty = everyone)
 		defs = append(defs, mk("github",
@@ -140,6 +140,7 @@ type toolArgs struct {
 	Kind, Number, Symbol, Source                                       string
 	User, Reason, Channel, Thread, Duration                            string // moderation + forum
 	Days                                                               int
+	Seconds                                                            int // slowmode seconds
 	Private                                                            bool
 	Benchmarks                                                         []string
 	Models                                                             []benchModel

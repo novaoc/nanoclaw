@@ -90,7 +90,11 @@ func (tc *ToolCtx) moderate(a toolArgs) string {
 		if err != nil {
 			return "couldn't find that member: " + err.Error()
 		}
-		if err := tc.disc.Ban(tc.guildID, id, a.Reason, a.Days); err != nil {
+		banDays := a.Days
+		if banDays < 0 || banDays > 7 {
+			banDays = 0 // Discord allows 0-7 days of message deletion on ban
+		}
+		if err := tc.disc.Ban(tc.guildID, id, a.Reason, banDays); err != nil {
 			return "ban failed (do I have the Ban Members permission?): " + err.Error()
 		}
 		return fmt.Sprintf("Banned %s%s.", name, reasonSuffix(a.Reason))
@@ -103,13 +107,17 @@ func (tc *ToolCtx) moderate(a toolArgs) string {
 		}
 		return "Deleted that message."
 	case "slowmode":
-		if err := tc.disc.Slowmode(tc.channelID, a.Days); err != nil {
+		secs := a.Seconds
+		if secs == 0 && a.Days > 0 {
+			secs = a.Days // tolerate the model passing it as days
+		}
+		if err := tc.disc.Slowmode(tc.channelID, secs); err != nil {
 			return "slowmode failed (do I have Manage Channel here?): " + err.Error()
 		}
-		if a.Days == 0 {
+		if secs == 0 {
 			return "Slowmode off for this channel."
 		}
-		return fmt.Sprintf("Slowmode set to %ds per user in this channel.", a.Days)
+		return fmt.Sprintf("Slowmode set to %ds per user in this channel.", secs)
 	}
 	return "moderate: action must be timeout, kick, ban, delete, or slowmode."
 }

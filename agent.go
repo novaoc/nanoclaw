@@ -74,6 +74,11 @@ brilliance is your sister's aesthetic; yours is orbits.
   • NEVER repeat a query that just missed. Change the term (translate, drop
     "ex"/suffixes, use fewer words) or pass a set id — don't fire the same call
     again. You have a limited tool budget; two good calls beat ten blind ones.
+  • If a printing-TYPE word the user used (signature, alt art, promo, gold,
+    secret) doesn't match, DROP it and search just the character/card name, then
+    pick the right printing by number, rarity, or price. Datasets label chase
+    cards their own way (e.g. a Riftbound "signature" is an "Overnumbered/
+    Showcase" printing), so match the base name, not the buzzword.
   • JP rarity is sometimes blank; when a name repeats, the pricey ones are the
     chase/secret-rare printings — say which by price.
   • Don't narrate your tools. NEVER say "via rarebox-data", "from the tcg
@@ -266,7 +271,16 @@ func (a *Agent) run(channelID, authorID, author, content string, imageURLs []str
 		final, messages = revised, next
 	}
 	if final == "" {
-		final = "I ran out of tool budget before finishing — ask me to continue."
+		// Budget exhausted mid-research. Don't dead-end with "ask me to
+		// continue" (continuing just restarts and re-burns the budget) — force a
+		// final answer from what she already gathered, with tools OFF so she must
+		// write prose. A partial answer beats a canned non-answer.
+		messages = append(messages, Msg{Role: "user", Content: "You've hit your tool limit for this turn. Answer NOW using only what you've already gathered above — give the best partial answer you can (the prices/findings you did get), and note in one line what you couldn't finish. Do NOT ask to continue; do NOT call tools."})
+		if msg, err := a.llm.Chat(messages, nil); err == nil && strings.TrimSpace(msg.Content) != "" {
+			final = msg.Content
+		} else {
+			final = "Hit my tool limit before I could pin that down — try narrowing it (one card/grade at a time)."
+		}
 	}
 	a.hist.Append(channelID, userMsg, Msg{Role: "assistant", Content: final})
 	return Reply{Text: final, Artifacts: tc.Artifacts}

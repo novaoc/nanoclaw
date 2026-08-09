@@ -68,6 +68,15 @@ func toolDefs(cfg *Config) []ToolDef {
 			"Fetch an image by URL and attach it to your Discord reply (e.g. a card image from a tcg lookup, or any picture the user asks to see). Images only, up to 8MB.",
 			`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),
 	}
+	if cfg.GithubEnabled() { // API only — no shell; gated by NANOCLAW_REPO_USERS (empty = everyone)
+		defs = append(defs, mk("github",
+			"Create and populate GitHub repos and open pull requests via the API, as Vela's own account. This is API-ONLY — nothing runs on the box. Actions: "+
+				"create_repo {name, description?, private?} — makes a repo (with a README); "+
+				"put_file {repo, path, content, message?, branch?} — writes/commits a file (repo is 'name' for Vela's own or 'owner/name'); "+
+				"open_pr {repo:'owner/name', title, head, base?, body?} — head is 'branch' (same repo) or 'forkowner:branch' (from a fork); "+
+				"fork {repo:'owner/name'}. To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
+			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|put_file|open_pr|fork"},"name":{"type":"string"},"description":{"type":"string"},"private":{"type":"boolean"},"repo":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
+	}
 	if cfg.CodeEnabled() { // gated to the coder allowlist (NANOCLAW_CODERS)
 		defs = append(defs,
 			mk("shell",
@@ -83,24 +92,29 @@ func toolDefs(cfg *Config) []ToolDef {
 	return defs
 }
 
+type toolArgs struct {
+	Query, URL, Name, Content, Note, Command, Path, Game, Set          string
+	Action, Description, Repo, Message, Branch, Title, Head, Base, Body string
+	Private                                                            bool
+}
+
 func (tc *ToolCtx) Run(name, args string) string {
-	var a struct {
-		Query, URL, Name, Content, Note, Command, Path, Game, Set string
-	}
+	var a toolArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "tool error: bad arguments: " + err.Error()
 	}
-	// Injection guard: untrusted web content and code execution must never
-	// coexist in one turn, or a poisoned page fetched this turn could inject
-	// the shell commands the model then runs. The two sides are mutually
-	// exclusive per turn (they persist across the whole dive too).
+	// Injection guard: untrusted web content and box-writing actions (shell,
+	// files, or GitHub writes) must never coexist in one turn, or a poisoned
+	// page fetched this turn could drive the model into running commands or
+	// pushing code. The two sides are mutually exclusive per turn (they persist
+	// across the whole dive too).
 	web := name == "web_search" || name == "fetch_url" || name == "tcg"
-	code := name == "shell" || name == "write_file" || name == "read_file"
+	code := name == "shell" || name == "write_file" || name == "read_file" || name == "github"
 	if web && tc.usedCode {
-		return "REFUSED: web fetch blocked — this turn already ran code, and untrusted page content must not mix with code execution. Do the browsing in a separate message."
+		return "REFUSED: web fetch blocked — this turn already ran code or a GitHub write, and untrusted page content must not mix with those. Do the browsing in a separate message."
 	}
 	if code && tc.usedWeb {
-		return "REFUSED: code blocked — this turn already fetched from the web, and a fetched page must not be able to reach a shell (prompt-injection guard). Run code in a separate message from any browsing."
+		return "REFUSED: blocked — this turn already fetched from the web, and a fetched page must not be able to reach a shell or push code (prompt-injection guard). Run this in a separate message from any browsing."
 	}
 
 	switch name {
@@ -122,6 +136,9 @@ func (tc *ToolCtx) Run(name, args string) string {
 		return tc.saveArtifact(a.Name, a.Content)
 	case "remember":
 		return appendMemory(tc.cfg, a.Note)
+	case "github":
+		tc.usedCode = true
+		return tc.runGithub(a)
 	case "shell":
 		tc.usedCode = true
 		return tc.runShell(a.Command)

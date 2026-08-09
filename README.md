@@ -89,6 +89,25 @@ see it (`NANOCLAW_DIVE_PASSES`, default 2). The economics are the point: a
 cheap model looped twice with a clear goal beats one expensive shot, at a
 fraction of the cost.
 
+### Repos & PRs for everyone (github tool)
+
+Optional, and separate from the coder shell. With a `GITHUB_TOKEN` set, Vela
+gets a `github` tool that talks straight to the GitHub API as her own account —
+**create a repo, write/commit files, open a PR, fork** — with **no shell and
+nothing running on the box**. Because it can't touch the machine, it's open to
+the whole server by default; set `NANOCLAW_REPO_USERS` to a comma-separated
+Discord-ID list to narrow it.
+
+> **@vela** spin up a repo `tcg-price-alerts`, drop in a README and a hello.py
+> → creates `Velaoc/tcg-price-alerts`, commits the files, links them
+
+To contribute to someone else's repo she forks it, writes to a branch on the
+fork, and opens the PR upstream — all through the API. Every action is
+audit-logged, and it's held to the same per-turn injection guard as code (a
+page fetched this turn can't drive a repo write). This is the safe way to let
+the room "request a repo" **without** handing anyone the box — that's the
+allow-listed shell below.
+
 ### Code, git & libraries (coder allowlist)
 
 Optional. Add Discord IDs to `NANOCLAW_CODERS` and those users can have Vela

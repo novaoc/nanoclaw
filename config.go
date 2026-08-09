@@ -18,6 +18,16 @@ func atoiOr(s string, def int) int {
 // VisionEnabled reports whether Vela can read images sent to Discord.
 func (c *Config) VisionEnabled() bool { return c.VisionModel != "" }
 
+// GithubEnabled reports whether the API-only github tool is available (needs a
+// token). It's separate from the coder shell: no box access, just GitHub API.
+func (c *Config) GithubEnabled() bool { return c.GitHubToken != "" }
+
+// RepoAllowed gates the github tool. Empty RepoUsers = open to everyone in the
+// server (the private-server default); a non-empty list restricts to those IDs.
+func (c *Config) RepoAllowed(uid string) bool {
+	return len(c.RepoUsers) == 0 || c.RepoUsers[uid]
+}
+
 // CodeEnabled reports whether the shell/file tools may run — gated to an
 // explicit coder allowlist (NANOCLAW_CODERS). A shell is root-level trust on
 // the box, so an empty allowlist turns the whole capability off.
@@ -40,6 +50,7 @@ type Config struct {
 	BraveKey      string // BRAVE_API_KEY — real search API; falls back to DuckDuckGo scraping
 
 	Coders      map[string]bool // Discord IDs allowed to run shell/code (root-trust)
+	RepoUsers   map[string]bool // Discord IDs allowed the github API tool; empty = everyone
 	Workspace   string          // where code lives + shell runs
 	GitHubToken string          // GITHUB_TOKEN — enables authenticated push
 	GitName     string          // commit identity (Vela's own account)
@@ -91,6 +102,7 @@ func LoadConfig() (*Config, error) {
 		DivePasses:    atoiOr(get("NANOCLAW_DIVE_PASSES", ""), 2),
 		BraveKey:      get("BRAVE_API_KEY", ""),
 		Coders:        map[string]bool{},
+		RepoUsers:     map[string]bool{},
 		Workspace:     get("NANOCLAW_WORKSPACE", ""),
 		GitHubToken:   get("GITHUB_TOKEN", ""),
 		GitName:       get("GIT_NAME", "Vela"),
@@ -107,6 +119,11 @@ func LoadConfig() (*Config, error) {
 	for _, id := range strings.Split(get("NANOCLAW_CODERS", ""), ",") {
 		if id = strings.TrimSpace(id); id != "" {
 			cfg.Coders[id] = true
+		}
+	}
+	for _, id := range strings.Split(get("NANOCLAW_REPO_USERS", ""), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			cfg.RepoUsers[id] = true
 		}
 	}
 	if cfg.DiscordToken == "" {

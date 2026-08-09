@@ -130,6 +130,30 @@ Token strategy follows the five-forces method from Bankr's
 [token-strategist](https://github.com/BankrBot/token-strategist); the wallet
 API is [bankr-api-examples](https://github.com/BankrBot/bankr-api-examples).
 
+### Code, git & libraries (coder allowlist)
+
+Optional. Add Discord IDs to `NANOCLAW_CODERS` and those users can have Vela
+write code, run it, install libraries, and push to her own GitHub — a shell +
+`write_file`/`read_file` in a persistent workspace, `git` authenticated by
+`GITHUB_TOKEN` (her account).
+
+> **@vela** clone my repo, add a /health endpoint, run the tests, commit and push
+
+**This is root-level trust.** A shell can read the process environment and
+every user's encrypted wallet material, so `NANOCLAW_CODERS` members are
+effectively box admins — add only people you'd give the whole machine to.
+Blank allowlist = the capability is entirely off; non-coders are refused in
+code. `write_file`/`read_file` are confined to the workspace (no `..` escape);
+`shell` is deliberately unconfined for those who pass the allowlist.
+
+**Hardware reality — she's a 22×36 mm board, not a build server.** The
+LicheeRV Nano is one ~1 GHz RISC-V core + **256 MB RAM**. Great for git, small
+scripts, config, and lightweight installs; a big `npm install`, a from-source
+compile, or a heavy test suite will crawl or OOM, and RISC-V means some
+prebuilt wheels/binaries don't exist. For serious builds she'll write the code
+and **push**, letting CI (GitHub Actions) or a bigger machine compile — and
+she'll tell you that instead of thrashing the board.
+
 ### Mentions — quick turns
 
 > **@nanoclaw** mock up a landing page for a TCG price-alert app — dark, one CTA

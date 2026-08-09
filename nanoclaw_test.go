@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -316,6 +317,61 @@ func TestKeyStoreEncryption(t *testing.T) {
 	// delete wipes it
 	if !ks.Delete("alice") || ks.Has("alice") {
 		t.Fatal("delete should remove the key")
+	}
+}
+
+func TestCodeCapabilityGating(t *testing.T) {
+	cfg := testCfg(t)
+	cfg.Coders = map[string]bool{"dev": true}
+	cfg.Workspace = t.TempDir()
+
+	// tools only offered when a coder allowlist exists
+	names := map[string]bool{}
+	for _, d := range toolDefs(cfg) {
+		names[d.Function.Name] = true
+	}
+	for _, n := range []string{"shell", "write_file", "read_file"} {
+		if !names[n] {
+			t.Fatalf("%s should be offered when coders are set", n)
+		}
+	}
+	for _, d := range toolDefs(&Config{}) {
+		if d.Function.Name == "shell" {
+			t.Fatal("shell must NOT appear without a coder allowlist")
+		}
+	}
+
+	coder := &ToolCtx{cfg: cfg, authorID: "dev"}
+	rando := &ToolCtx{cfg: cfg, authorID: "rando"}
+
+	// non-coder is refused before anything runs
+	if out := rando.runShell("echo hi"); !strings.Contains(out, "REFUSED") {
+		t.Fatalf("non-coder shell should be refused: %s", out)
+	}
+	if out := rando.writeWorkspaceFile("x.txt", "hi"); !strings.Contains(out, "REFUSED") {
+		t.Fatalf("non-coder write should be refused: %s", out)
+	}
+
+	// coder can write + read + shell, confined to the workspace
+	if out := coder.writeWorkspaceFile("sub/hello.txt", "hi vela"); !strings.Contains(out, "wrote") {
+		t.Fatalf("coder write failed: %s", out)
+	}
+	if out := coder.readWorkspaceFile("sub/hello.txt"); out != "hi vela" {
+		t.Fatalf("read mismatch: %q", out)
+	}
+	if out := coder.runShell("cat sub/hello.txt"); !strings.Contains(out, "hi vela") {
+		t.Fatalf("shell cwd should be the workspace: %s", out)
+	}
+
+	// path confinement: cannot escape the workspace
+	if out := coder.writeWorkspaceFile("../../etc/evil", "x"); !strings.Contains(out, "escapes") {
+		t.Fatalf("path traversal on write not blocked: %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Workspace, "..", "..", "etc", "evil")); err == nil {
+		t.Fatal("traversal wrote outside the workspace")
+	}
+	if out := coder.readWorkspaceFile("../../../etc/passwd"); !strings.Contains(out, "escapes") {
+		t.Fatalf("path traversal on read not blocked: %s", out)
 	}
 }
 

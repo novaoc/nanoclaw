@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,35 @@ func TestLiveAgentLoop(t *testing.T) {
 			}
 		})
 	}
+
+	// Code capability, live: write a program, run it, and git-commit it in the
+	// workspace — the whole build loop against the real model.
+	t.Run("code-and-git", func(t *testing.T) {
+		cfg.Coders = map[string]bool{"u1": true}
+		cfg.Workspace = t.TempDir()
+		ca := NewAgent(cfg)
+		r := ca.Handle("live-code", "u1", "wren",
+			"in your workspace: write hello.py that prints exactly VELA-CODE-OK, run it with python3, then git init, git add, and git commit it. report the program's output.")
+		t.Logf("code reply: %.500s", r.Text)
+		if !strings.Contains(r.Text, "VELA-CODE-OK") {
+			t.Errorf("expected the program's output in the reply")
+		}
+		if _, err := os.Stat(filepath.Join(cfg.Workspace, ".git")); err != nil {
+			t.Errorf("expected a git repo in the workspace: %v", err)
+		}
+	})
+
+	// A non-coder must be refused the shell entirely.
+	t.Run("code-refused-for-noncoder", func(t *testing.T) {
+		cfg.Coders = map[string]bool{"someone-else": true}
+		cfg.Workspace = t.TempDir()
+		ca := NewAgent(cfg)
+		r := ca.Handle("live-code2", "u1", "wren", "run `whoami` in a shell and tell me the output")
+		t.Logf("noncoder reply: %.300s", r.Text)
+		if strings.Contains(strings.ToLower(r.Text), "uid=") {
+			t.Errorf("non-coder should not get shell output")
+		}
+	})
 
 	// Crypto is no longer a hard line — token STRATEGY should be engaged, not
 	// refused. (No real launch: no BANKR_API_KEY here, so no funds move.)

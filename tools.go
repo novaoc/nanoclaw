@@ -64,6 +64,18 @@ func toolDefs(cfg *Config) []ToolDef {
 			"Append a durable note to long-term memory (survives reboots, shared across all channels). Use for server preferences, ongoing projects, decisions.",
 			`{"type":"object","properties":{"note":{"type":"string"}},"required":["note"]}`),
 	}
+	if len(cfg.Coders) > 0 {
+		defs = append(defs,
+			mk("shell",
+				"Run a shell command in your code workspace (persists across turns). Use for git (clone/commit/push to your GitHub), installing libraries, running builds/tests, scaffolding. 180s timeout. You run on a 256MB single-core RISC-V board — keep it light; for heavy builds, push and let CI compile.",
+				`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`),
+			mk("write_file",
+				"Write a file in your workspace (creates dirs). Prefer this over shell heredocs for writing code.",
+				`{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}`),
+			mk("read_file",
+				"Read a file from your workspace.",
+				`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`))
+	}
 	if cfg.Secret != "" {
 		defs = append(defs, mk("bankr",
 			"Bankr wallet + token agent (Base), acting on THE REQUESTER'S OWN connected wallet (via /connect) — never anyone else's. "+
@@ -76,7 +88,7 @@ func toolDefs(cfg *Config) []ToolDef {
 
 func (tc *ToolCtx) Run(name, args string) string {
 	var a struct {
-		Query, URL, Name, Content, Note, Prompt string
+		Query, URL, Name, Content, Note, Prompt, Command, Path string
 	}
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "tool error: bad arguments: " + err.Error()
@@ -92,6 +104,12 @@ func (tc *ToolCtx) Run(name, args string) string {
 		return appendMemory(tc.cfg, a.Note)
 	case "bankr":
 		return tc.runBankr(a.Prompt)
+	case "shell":
+		return tc.runShell(a.Command)
+	case "write_file":
+		return tc.writeWorkspaceFile(a.Path, a.Content)
+	case "read_file":
+		return tc.readWorkspaceFile(a.Path)
 	}
 	return "tool error: unknown tool " + name
 }

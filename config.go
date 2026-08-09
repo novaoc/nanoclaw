@@ -29,6 +29,12 @@ type Config struct {
 
 	BankrURL string // BANKR_API_URL, default https://api.bankr.bot
 	Secret   string // NANOCLAW_SECRET — encrypts users' connected Bankr keys at rest
+
+	Coders      map[string]bool // Discord IDs allowed to run shell/code (root-trust)
+	Workspace   string          // where code lives + shell runs
+	GitHubToken string          // GITHUB_TOKEN — enables authenticated push
+	GitName     string          // commit identity (Vela's own account)
+	GitEmail    string
 }
 
 // LoadConfig reads /etc/nanoclaw.env then ./nanoclaw.env (later wins),
@@ -75,10 +81,23 @@ func LoadConfig() (*Config, error) {
 		DivePasses:    atoiOr(get("NANOCLAW_DIVE_PASSES", ""), 2),
 		BankrURL:      get("BANKR_API_URL", "https://api.bankr.bot"),
 		Secret:        get("NANOCLAW_SECRET", ""),
+		Coders:        map[string]bool{},
+		Workspace:     get("NANOCLAW_WORKSPACE", ""),
+		GitHubToken:   get("GITHUB_TOKEN", ""),
+		GitName:       get("GIT_NAME", "Vela"),
+		GitEmail:      get("GIT_EMAIL", ""),
+	}
+	if cfg.Workspace == "" {
+		cfg.Workspace = cfg.DataDir + "/workspace"
 	}
 	for _, id := range strings.Split(get("FOCUS_CHANNELS", ""), ",") {
 		if id = strings.TrimSpace(id); id != "" {
 			cfg.FocusChannels[id] = true
+		}
+	}
+	for _, id := range strings.Split(get("NANOCLAW_CODERS", ""), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			cfg.Coders[id] = true
 		}
 	}
 	if cfg.DiscordToken == "" {

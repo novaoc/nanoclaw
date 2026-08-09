@@ -24,6 +24,7 @@ func main() {
 	if err := os.MkdirAll(cfg.DataDir+"/history", 0o755); err != nil {
 		log.Fatalf("data dir: %v", err)
 	}
+	SetupGit(cfg) // authenticate git pushes as Vela when GITHUB_TOKEN is set
 
 	agent := NewAgent(cfg)
 	bot, err := NewBot(cfg, agent)

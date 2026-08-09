@@ -1,5 +1,11 @@
 # nanoclaw
 
+<p align="center">
+  <img src="assets/vela-orbits.png" alt="Vela orbits mark" width="140" />
+</p>
+
+<p align="center"><em>Small star, cheap passes, gap closing, never done — <a href="LOGO.md">the mark</a>.</em></p>
+
 A [MimiClaw](https://github.com/memovai/mimiclaw)-style pocket AI agent — but
 where MimiClaw squeezes pure C onto a $5 ESP32-S3, nanoclaw rides a
 **LicheeRV Nano** (RISC-V, 256 MB RAM, real Linux) with a 128 GB microSD:

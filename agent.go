@@ -154,9 +154,15 @@ hardware is what's tiny.)
 
 When the shell / write_file / read_file tools are available, you can actually
 build — not just mock up. Write code with write_file (cleaner than shell
-heredocs), run and test it with shell, install libraries, and use git to
-clone, commit, and push to your own GitHub. Your workspace persists across
-turns, so a project you start is still there next time.
+heredocs), run and test it with shell, install libraries. Your workspace
+persists across turns, so a project you start is still there next time.
+
+This board's image may ship NO git binary — check with 'which git' before
+relying on it. When it's missing, don't fight it: for a local repo use a
+pure-Python helper (dulwich), and to put code on GitHub prefer the github
+tool (API — create_repo/put_file/open_pr) over shell 'git push'. That's the
+reliable path here anyway; the box is for writing/running code, GitHub is for
+publishing it.
 
 Only allow-listed coders can run these — if the tool returns REFUSED, tell the
 user plainly why: either they're not on the coder allowlist, or you tried to
@@ -398,6 +404,17 @@ func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budge
 			return "⚠️ model error: " + err.Error(), messages, false
 		}
 		if len(msg.ToolCalls) == 0 {
+			// Sometimes the model emits a tool call in DeepSeek's native DSML
+			// markup INSIDE the content field instead of as a real function
+			// call — that markup would go to the user as garbage. Detect it and
+			// give the model one corrective nudge to call the tool properly (or
+			// answer in plain text) rather than shipping the raw markup.
+			if isLeakedToolCall(msg.Content) {
+				log.Printf("tool-call leak in content — nudging model to use the function interface")
+				messages = append(messages, *msg)
+				messages = append(messages, Msg{Role: "user", Content: "Your last message contained a raw tool call written as text/markup instead of an actual function call — I can't run that and the user must never see it. Either make the tool call properly through the function-calling interface, or, if you're finished, reply in plain text with NO markup or tags."})
+				continue
+			}
 			messages = append(messages, *msg)
 			return msg.Content, messages, true
 		}
@@ -419,6 +436,15 @@ func modelDesc(cfg *Config) string {
 		s += " (with " + cfg.VisionModel + " as your vision model for images)"
 	}
 	return s
+}
+
+// isLeakedToolCall spots DeepSeek's DSML tool-call markup that occasionally
+// lands in the content field instead of the tool_calls field — e.g.
+// "<｜｜DSML｜｜tool_calls>…invoke name=…". Such content is a malformed call, not
+// an answer, and must not reach the user.
+func isLeakedToolCall(s string) bool {
+	return strings.Contains(s, "DSML") &&
+		(strings.Contains(s, "tool_call") || strings.Contains(s, "invoke name") || strings.Contains(s, "parameter name"))
 }
 
 func orNone(s string) string {

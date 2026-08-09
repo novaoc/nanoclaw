@@ -95,7 +95,11 @@ func NewLLM(cfg *Config) *LLM {
 }
 
 func (l *LLM) Chat(ctx context.Context, messages []Msg, tools []ToolDef) (*Msg, error) {
-	body, err := json.Marshal(chatRequest{Model: l.model, Messages: messages, Tools: tools, MaxTok: 4096})
+	// 8192, not 4096: a full self-contained HTML mockup's content easily
+	// exceeds 4k output tokens, and when it does the save_artifact tool-call
+	// arguments get truncated to invalid JSON — the artifact never saves and
+	// the model burns its iter budget retrying. Bigger ceiling fits the file.
+	body, err := json.Marshal(chatRequest{Model: l.model, Messages: messages, Tools: tools, MaxTok: 8192})
 	if err != nil {
 		return nil, err
 	}

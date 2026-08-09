@@ -42,8 +42,14 @@ func readMemory(cfg *Config) string {
 // literal </memory> that forges the block boundary the system prompt relies on.
 var memFence = regexp.MustCompile(`(?i)</?memory>`)
 
+// selfDated strips a leading "- [YYYY-MM-DD] " (and any bullet) the model
+// sometimes bakes into the note itself, so appendMemory's own stamp doesn't
+// double it ("- [2026-08-09] - [2026-08-09] …").
+var selfDated = regexp.MustCompile(`^\s*-?\s*\[\d{4}-\d{2}-\d{2}\]\s*`)
+
 func appendMemory(cfg *Config, note string) string {
 	note = memFence.ReplaceAllString(strings.TrimSpace(note), "[mem]")
+	note = strings.TrimSpace(selfDated.ReplaceAllString(note, ""))
 	if note == "" {
 		return "memory error: empty note"
 	}

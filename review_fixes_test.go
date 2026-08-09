@@ -64,3 +64,26 @@ func TestGhEsc(t *testing.T) {
 		t.Errorf("slashes must survive: %q", got)
 	}
 }
+
+func TestIsLeakedToolCall(t *testing.T) {
+	leak := `<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="bench_chart">`
+	if !isLeakedToolCall(leak) {
+		t.Error("should flag DSML tool-call leak")
+	}
+	if isLeakedToolCall("Bitcoin is at $65k, up 1.6% this month.") {
+		t.Error("normal prose must not be flagged")
+	}
+}
+
+func TestSelfDatedMemory(t *testing.T) {
+	cfg := testCfg(t)
+	appendMemory(cfg, "- [2026-08-09] Aregus is on CET")
+	appendMemory(cfg, "plain note")
+	m := fullMemory(cfg)
+	if strings.Contains(m, "] - [") {
+		t.Errorf("double date not stripped: %q", m)
+	}
+	if !strings.Contains(m, "Aregus is on CET") || !strings.Contains(m, "plain note") {
+		t.Errorf("notes missing: %q", m)
+	}
+}

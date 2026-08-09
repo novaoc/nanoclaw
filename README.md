@@ -23,19 +23,27 @@ remembers your server's projects across reboots.
 
 ```
 Discord message ──► gateway (discordgo) ──► agent loop (DeepSeek tool calling)
-                                             │  web_search   (DuckDuckGo)
-                                             │  fetch_url    (read a source)
-                                             │  save_artifact(HTML/code → attachment)
-                                             │  remember     (MEMORY.md on SD)
+  (+ attached images                        │  web_search   (Brave → DuckDuckGo)
+   read by a vision model)                  │  fetch_url    (read a source)
+                                            │  tcg          (rarebox-data cards + prices)
+                                            │  price_chart  (card/stock/crypto → PNG chart)
+                                            │  attach_image (post an image)
+                                            │  github       (create repo / PR — API, no shell)
+                                            │  shell/write/read_file  (coder allowlist)
+                                            │  save_artifact(HTML/code → attachment)
+                                            │  remember     (MEMORY.md on SD)
 reply + attachments ◄─ 2000-char splitting ◄─┘  per-channel history on SD
 ```
 
 - Answers when **@mentioned** anywhere, in **DMs**, and in configured
   **focus channels** without a mention — anyone in the server can use it.
+- **Sees images**: an attached picture (in the message or the one it replies to)
+  is read by a vision model and folded into the turn — snap a card, get its price.
 - Per-channel conversation history and one shared long-term memory file,
   both plain files on the microSD (this is the 128 GB doing MimiClaw's
   16 MB-flash job with room for a lifetime of artifacts).
-- Two concurrent turns max and a 180 MB memory cap — tuned for the Nano.
+- **One turn at a time** (requests queue, with an ⏳ react so waiters know) and a
+  180 MB memory cap — tuned for the Nano's RAM. `NANOCLAW_CONCURRENCY` to raise it.
 
 ## Setup
 
@@ -148,19 +156,34 @@ prebuilt wheels/binaries don't exist. For serious builds she'll write the code
 and **push**, letting CI (GitHub Actions) or a bigger machine compile — and
 she'll tell you that instead of thrashing the board.
 
-### TCG lookups & images
+### TCG lookups, prices & charts
 
-Vela can look up any card, set, or market price from the open
+Vela looks up any card, set, or market price from the open
 [rarebox-data](https://github.com/novaoc/rarebox-data) dataset — Pokémon
-(EN/JP), Magic, Yu-Gi-Oh!, Lorcana, One Piece (EN/JP), Riftbound — and attach
-card images to Discord on request. No key needed for either.
+(EN/JP), Magic, Yu-Gi-Oh!, Lorcana, One Piece (EN/JP), Riftbound. She searches
+by **English name** across sets (translating JP names, falling back to
+pokemontcg.io for older cards), so you don't need to know the set id. Graded
+(PSA) prices and sealed products, which the dataset doesn't carry, come from the
+web. No key needed.
 
 > **@vela** what's the SIR Charizard from Phantasmal Flames worth? show me it
 > → "Mega Charizard X ex #125 [Special Illustration Rare] — $753.44", image attached
 
+**Price charts (`price_chart`).** For how a price has moved over time she builds
+a **PNG chart that renders inline in Discord** — and she posts it *by default*
+whenever a chart is available, not only when asked:
+
+- **Cards** → historical series from
+  [rarebox-price-history](https://github.com/novaoc/rarebox-price-history)
+  (Pokémon EN/JP, MTG, Lorcana, One Piece, Riftbound — daily ~90 days).
+- **Crypto** → CoinGecko. **Stocks** → Yahoo Finance. All keyless.
+
+> **@vela** chart the Prismatic Umbreon · **@vela** bitcoin last 3 months · **@vela** TSLA
+
 `web_search` uses the **Brave Search API** when `BRAVE_API_KEY` is set (a real
-JSON API), falling back to DuckDuckGo otherwise. `attach_image` fetches any
-image URL (SSRF-guarded, ≤8MB, image content-types only) and posts it.
+JSON API), and **falls back to DuckDuckGo** on any Brave error/quota, not just
+when unset. `attach_image` fetches any image URL (SSRF-guarded, ≤8MB, image
+content-types only) and posts it.
 
 ### Reading images (vision)
 

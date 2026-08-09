@@ -12,21 +12,45 @@ import (
 	"time"
 
 	"golang.org/x/image/font"
-	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/font/gofont/gobold"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
 
 // A static PNG line chart — renders inline in Discord (an HTML file only shows
-// as a download). Pure Go, no headless browser, fine for the little board.
+// as a download). High resolution + a vector font so it stays crisp when Discord
+// scales it (retina, mobile). Pure Go, no headless browser.
 
 var (
 	colBG   = color.RGBA{0x0d, 0x11, 0x17, 0xff}
-	colGrid = color.RGBA{0x1c, 0x21, 0x28, 0xff}
-	colMut  = color.RGBA{0x7d, 0x85, 0x90, 0xff}
+	colGrid = color.RGBA{0x22, 0x28, 0x30, 0xff}
+	colMut  = color.RGBA{0x8b, 0x94, 0x9e, 0xff}
 	colFG   = color.RGBA{0xe6, 0xed, 0xf3, 0xff}
 	colUp   = color.RGBA{0x3f, 0xb9, 0x50, 0xff}
 	colDn   = color.RGBA{0xf8, 0x51, 0x49, 0xff}
+
+	faceTitle, facePrice, faceSub, faceAxis font.Face
 )
+
+func mkFace(ttf []byte, pts float64) font.Face {
+	f, err := opentype.Parse(ttf)
+	if err != nil {
+		return nil
+	}
+	fc, err := opentype.NewFace(f, &opentype.FaceOptions{Size: pts, DPI: 72, Hinting: font.HintingFull})
+	if err != nil {
+		return nil
+	}
+	return fc
+}
+
+func init() {
+	faceTitle = mkFace(gobold.TTF, 30)
+	facePrice = mkFace(gobold.TTF, 44)
+	faceSub = mkFace(goregular.TTF, 20)
+	faceAxis = mkFace(goregular.TTF, 20)
+}
 
 func withCommas(s string) string {
 	n := len(s)
@@ -58,11 +82,11 @@ func chartMoney(v float64) string {
 	return "$" + withCommas(s)
 }
 
-func drawText(img *image.RGBA, x, y int, s string, col color.Color) {
-	(&font.Drawer{Dst: img, Src: image.NewUniform(col), Face: basicfont.Face7x13, Dot: fixed.P(x, y)}).DrawString(s)
+func drawText(img *image.RGBA, x, y int, s string, col color.Color, face font.Face) {
+	(&font.Drawer{Dst: img, Src: image.NewUniform(col), Face: face, Dot: fixed.P(x, y)}).DrawString(s)
 }
 
-func textW(s string) int { return len(s) * 7 }
+func textW(face font.Face, s string) int { return font.MeasureString(face, s).Round() }
 
 func plot(img *image.RGBA, x, y int, c color.RGBA, r int) {
 	for dy := -r; dy <= r; dy++ {
@@ -91,8 +115,8 @@ func hline(img *image.RGBA, x0, x1, y int, c color.RGBA) {
 }
 
 func renderChartPNG(title, sub string, pts []pricePoint) []byte {
-	const W, H = 900, 430
-	const PL, PR, PT, PB = 74, 24, 82, 40
+	const W, H = 1600, 760
+	const PL, PR, PT, PB = 128, 44, 168, 66
 	img := image.NewRGBA(image.Rect(0, 0, W, H))
 	draw.Draw(img, img.Bounds(), image.NewUniform(colBG), image.Point{}, draw.Src)
 
@@ -131,32 +155,32 @@ func renderChartPNG(title, sub string, pts []pricePoint) []byte {
 		yy := Y(v)
 		hline(img, PL, W-PR, yy, colGrid)
 		lbl := chartMoney(v)
-		drawText(img, PL-8-textW(lbl), yy+4, lbl, colMut)
+		drawText(img, PL-14-textW(faceAxis, lbl), yy+7, lbl, colMut, faceAxis)
 	}
 	for i := 0; i <= 3; i++ {
 		ms := x0ms + (x1ms-x0ms)*int64(i)/3
 		lbl := time.UnixMilli(ms).UTC().Format("Jan 2 '06")
-		drawText(img, X(ms)-textW(lbl)/2, H-14, lbl, colMut)
+		drawText(img, X(ms)-textW(faceAxis, lbl)/2, H-24, lbl, colMut, faceAxis)
 	}
 	for i := 1; i < len(pts); i++ {
-		drawSeg(img, X(pts[i-1].Ms), Y(pts[i-1].Price), X(pts[i].Ms), Y(pts[i].Price), line, 1)
+		drawSeg(img, X(pts[i-1].Ms), Y(pts[i-1].Price), X(pts[i].Ms), Y(pts[i].Price), line, 2)
 	}
 
 	// header
-	drawText(img, 24, 26, title, colFG)
-	drawText(img, 24, 46, sub, colMut)
+	drawText(img, 40, 52, title, colFG, faceTitle)
+	drawText(img, 40, 88, sub, colMut, faceSub)
 	last, first := pts[len(pts)-1].Price, pts[0].Price
 	chg := 0.0
 	if first != 0 {
 		chg = (last - first) / first * 100
 	}
 	lp := chartMoney(last)
-	drawText(img, 24, 70, lp, colFG)
-	drawText(img, 24+textW(lp)+14, 70, fmt.Sprintf("%+.1f%%", chg), line)
+	drawText(img, 40, 146, lp, colFG, facePrice)
+	drawText(img, 40+textW(facePrice, lp)+22, 146, fmt.Sprintf("%+.1f%%", chg), line, faceSub)
 	rng := fmt.Sprintf("%s – %s · %d pts",
 		time.UnixMilli(x0ms).UTC().Format("Jan 2 '06"),
 		time.UnixMilli(x1ms).UTC().Format("Jan 2 '06"), len(pts))
-	drawText(img, W-PR-textW(rng), 26, rng, colMut)
+	drawText(img, W-PR-textW(faceAxis, rng), 52, rng, colMut, faceAxis)
 
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)

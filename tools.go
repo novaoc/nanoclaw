@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -238,19 +239,30 @@ func stripTags(s string) string {
 	return s
 }
 
-// braveSearch uses the Brave Search API (real JSON, not HTML scraping). Falls
-// back to DuckDuckGo when no key is set.
+// braveSearch uses the Brave Search API (real JSON, not HTML scraping) and
+// TRANSPARENTLY FALLS BACK to DuckDuckGo whenever Brave can't deliver — quota
+// exhausted (429), a bad/expired key (401/403), an outage (5xx), a network
+// error, or an empty/unparseable response. So hitting the Brave cap never
+// stops web search; it just quietly degrades to DDG and Vela keeps working.
 func braveSearch(key, query string) string {
+	if out, ok := braveTry(key, query); ok {
+		return out
+	}
+	log.Printf("brave search unavailable (quota/key/outage) — falling back to DuckDuckGo")
+	return webSearch(query)
+}
+
+func braveTry(key, query string) (string, bool) {
 	req, _ := http.NewRequest("GET", "https://api.search.brave.com/res/v1/web/search?count=8&q="+url.QueryEscape(query), nil)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Subscription-Token", key)
 	resp, err := ssrfClient.Do(req)
 	if err != nil {
-		return "search error: " + err.Error()
+		return "", false // network error → DDG
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Sprintf("search error: brave %d", resp.StatusCode)
+	if resp.StatusCode != 200 {
+		return "", false // 429 quota / 401-403 key / 5xx outage → DDG
 	}
 	var d struct {
 		Web struct {
@@ -258,17 +270,14 @@ func braveSearch(key, query string) string {
 		} `json:"web"`
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err := json.Unmarshal(body, &d); err != nil {
-		return "search error: bad response"
-	}
-	if len(d.Web.Results) == 0 {
-		return "no results"
+	if err := json.Unmarshal(body, &d); err != nil || len(d.Web.Results) == 0 {
+		return "", false // unparseable or empty → give DDG a shot
 	}
 	var b strings.Builder
 	for i, r := range d.Web.Results {
 		fmt.Fprintf(&b, "%d. %s\n   %s\n   %s\n", i+1, r.Title, r.URL, stripTags(r.Description))
 	}
-	return b.String()
+	return b.String(), true
 }
 
 func webSearch(query string) string {

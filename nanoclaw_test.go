@@ -417,6 +417,41 @@ func TestWebCodeInjectionGuard(t *testing.T) {
 	}
 }
 
+func TestRbNormNum(t *testing.T) {
+	cases := map[string]string{"001/217": "1", "TG07": "tg7", "SWSH001": "swsh1", "0": "0", "13": "13", "  25/198 ": "25"}
+	for in, want := range cases {
+		if got := rbNormNum(in); got != want {
+			t.Errorf("rbNormNum(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+func TestAttachImage(t *testing.T) {
+	tc := &ToolCtx{cfg: testCfg(t)}
+	// a real image content-type attaches with the right extension
+	if out := tc.saveImage("card", "image/png", strings.NewReader("\x89PNG fake")); !strings.Contains(out, "attached") {
+		t.Fatalf("png should attach: %s", out)
+	}
+	if len(tc.Artifacts) != 1 || !strings.HasSuffix(tc.Artifacts[0], ".png") {
+		t.Fatalf("artifact not .png: %v", tc.Artifacts)
+	}
+	// a non-image content-type is refused and doesn't attach
+	if out := tc.saveImage("page", "text/html", strings.NewReader("<html>")); !strings.Contains(out, "not an image") {
+		t.Fatalf("non-image refused: %s", out)
+	}
+	if len(tc.Artifacts) != 1 {
+		t.Fatal("non-image must not attach")
+	}
+	// SSRF: an internal target is refused at fetch time, before any save
+	if out := tc.attachImage("http://169.254.169.254/img.png"); !strings.Contains(out, "error") {
+		t.Fatalf("SSRF image fetch should error: %s", out)
+	}
+	// non-URL rejected
+	if out := tc.attachImage("not-a-url"); !strings.Contains(out, "http") {
+		t.Fatalf("bad url should be rejected: %s", out)
+	}
+}
+
 func TestSSRFBlocking(t *testing.T) {
 	blocked := []string{"127.0.0.1", "10.0.0.5", "192.168.1.1", "172.16.0.1",
 		"169.254.1.1", "0.0.0.0", "100.100.0.1", "::1", "fe80::1"}

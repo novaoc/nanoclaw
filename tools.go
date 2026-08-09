@@ -67,6 +67,12 @@ func toolDefs(cfg *Config) []ToolDef {
 		mk("remember",
 			"Append a durable note to long-term memory (survives reboots, shared across all channels). Use for server preferences, ongoing projects, decisions.",
 			`{"type":"object","properties":{"note":{"type":"string"}},"required":["note"]}`),
+		mk("tcg",
+			"Look up any TCG card, set, or market price from the open rarebox-data dataset — Pokémon (EN/JP), Magic, Yu-Gi-Oh!, Lorcana, One Piece (EN/JP), Riftbound. Omit `set` to find sets by name; give a set id to list its cards (filtered by `query`) with number, rarity, USD price, and image URL. For sealed products or live market chatter, use web_search.",
+			`{"type":"object","properties":{"game":{"type":"string","description":"pokemon|pokemon-ja|mtg|yugioh|lorcana|one-piece|one-piece-ja|riftbound"},"set":{"type":"string","description":"set id (e.g. me2); omit to search sets"},"query":{"type":"string","description":"card or set name filter"}},"required":["game"]}`),
+		mk("attach_image",
+			"Fetch an image by URL and attach it to your Discord reply (e.g. a card image from a tcg lookup, or any picture the user asks to see). Images only, up to 8MB.",
+			`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),
 	}
 	if cfg.CodeEnabled() { // off while this process holds wallet keys (interlock)
 		defs = append(defs,
@@ -92,7 +98,7 @@ func toolDefs(cfg *Config) []ToolDef {
 
 func (tc *ToolCtx) Run(name, args string) string {
 	var a struct {
-		Query, URL, Name, Content, Note, Prompt, Command, Path string
+		Query, URL, Name, Content, Note, Prompt, Command, Path, Game, Set string
 	}
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "tool error: bad arguments: " + err.Error()
@@ -101,7 +107,7 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// coexist in one turn, or a poisoned page fetched this turn could inject
 	// the shell commands the model then runs. The two sides are mutually
 	// exclusive per turn (they persist across the whole dive too).
-	web := name == "web_search" || name == "fetch_url"
+	web := name == "web_search" || name == "fetch_url" || name == "tcg"
 	code := name == "shell" || name == "write_file" || name == "read_file"
 	if web && tc.usedCode {
 		return "REFUSED: web fetch blocked — this turn already ran code, and untrusted page content must not mix with code execution. Do the browsing in a separate message."
@@ -113,10 +119,18 @@ func (tc *ToolCtx) Run(name, args string) string {
 	switch name {
 	case "web_search":
 		tc.usedWeb = true
+		if tc.cfg.BraveKey != "" {
+			return braveSearch(tc.cfg.BraveKey, a.Query)
+		}
 		return webSearch(a.Query)
 	case "fetch_url":
 		tc.usedWeb = true
 		return fetchURL(a.URL)
+	case "tcg":
+		tc.usedWeb = true
+		return tcgLookup(a.Game, a.Set, a.Query)
+	case "attach_image":
+		return tc.attachImage(a.URL)
 	case "save_artifact":
 		return tc.saveArtifact(a.Name, a.Content)
 	case "remember":
@@ -270,6 +284,39 @@ func stripTags(s string) string {
 	return s
 }
 
+// braveSearch uses the Brave Search API (real JSON, not HTML scraping). Falls
+// back to DuckDuckGo when no key is set.
+func braveSearch(key, query string) string {
+	req, _ := http.NewRequest("GET", "https://api.search.brave.com/res/v1/web/search?count=8&q="+url.QueryEscape(query), nil)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Subscription-Token", key)
+	resp, err := ssrfClient.Do(req)
+	if err != nil {
+		return "search error: " + err.Error()
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Sprintf("search error: brave %d", resp.StatusCode)
+	}
+	var d struct {
+		Web struct {
+			Results []struct{ Title, URL, Description string }
+		} `json:"web"`
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err := json.Unmarshal(body, &d); err != nil {
+		return "search error: bad response"
+	}
+	if len(d.Web.Results) == 0 {
+		return "no results"
+	}
+	var b strings.Builder
+	for i, r := range d.Web.Results {
+		fmt.Fprintf(&b, "%d. %s\n   %s\n   %s\n", i+1, r.Title, r.URL, stripTags(r.Description))
+	}
+	return b.String()
+}
+
 func webSearch(query string) string {
 	page, err := getPage("https://html.duckduckgo.com/html/?q=" + url.QueryEscape(query))
 	if err != nil {
@@ -335,4 +382,56 @@ func (tc *ToolCtx) saveArtifact(name, content string) string {
 	}
 	tc.Artifacts = append(tc.Artifacts, path)
 	return fmt.Sprintf("saved %s (%d bytes) — it will be attached to your reply", name, len(content))
+}
+
+const maxImageBytes = 8 << 20 // Discord's baseline attachment limit
+
+var imageExt = map[string]string{
+	"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
+	"image/gif": ".gif", "image/svg+xml": ".svg",
+}
+
+// attachImage fetches an image URL (SSRF-guarded) and attaches it to the reply.
+// Only image content-types, capped at Discord's limit. Binary bytes go to
+// Discord, never into the model's context — so this isn't an injection vector.
+func (tc *ToolCtx) attachImage(u string) string {
+	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		return "image error: absolute http(s) URL required"
+	}
+	resp, err := ssrfClient.Get(u)
+	if err != nil {
+		return "image error: " + err.Error()
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Sprintf("image error: http %d", resp.StatusCode)
+	}
+	ct := strings.TrimSpace(strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0])
+	return tc.saveImage(filepath.Base(u), ct, resp.Body)
+}
+
+// saveImage validates the content-type, caps the size, and attaches — split
+// out so it's testable without a live SSRF-guarded fetch.
+func (tc *ToolCtx) saveImage(name, contentType string, body io.Reader) string {
+	ext, ok := imageExt[contentType]
+	if !ok {
+		return "image error: not an image (content-type " + contentType + ")"
+	}
+	data, err := io.ReadAll(io.LimitReader(body, maxImageBytes+1))
+	if err != nil {
+		return "image error: " + err.Error()
+	}
+	if len(data) > maxImageBytes {
+		return "image error: too large (>8MB)"
+	}
+	base := unsafeName.ReplaceAllString(name, "-")
+	if !strings.Contains(base, ".") {
+		base += ext
+	}
+	path := filepath.Join(tc.cfg.DataDir, "artifacts", fmt.Sprintf("%d-%s", time.Now().Unix(), base))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "image error: " + err.Error()
+	}
+	tc.Artifacts = append(tc.Artifacts, path)
+	return fmt.Sprintf("fetched %s (%d KB) — it will be attached to your reply", base, len(data)/1024)
 }

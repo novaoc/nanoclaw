@@ -185,6 +185,20 @@ prebuilt wheels/binaries don't exist. For serious builds she'll write the code
 and **push**, letting CI (GitHub Actions) or a bigger machine compile — and
 she'll tell you that instead of thrashing the board.
 
+### TCG lookups & images
+
+Vela can look up any card, set, or market price from the open
+[rarebox-data](https://github.com/novaoc/rarebox-data) dataset — Pokémon
+(EN/JP), Magic, Yu-Gi-Oh!, Lorcana, One Piece (EN/JP), Riftbound — and attach
+card images to Discord on request. No key needed for either.
+
+> **@vela** what's the SIR Charizard from Phantasmal Flames worth? show me it
+> → "Mega Charizard X ex #125 [Special Illustration Rare] — $753.44", image attached
+
+`web_search` uses the **Brave Search API** when `BRAVE_API_KEY` is set (a real
+JSON API), falling back to DuckDuckGo otherwise. `attach_image` fetches any
+image URL (SSRF-guarded, ≤8MB, image content-types only) and posts it.
+
 ### Mentions — quick turns
 
 > **@nanoclaw** mock up a landing page for a TCG price-alert app — dark, one CTA

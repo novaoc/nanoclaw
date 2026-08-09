@@ -38,6 +38,18 @@ func TestLiveAgentLoop(t *testing.T) {
 		t.Logf("artifact %s (%d bytes) ✓", r.Artifacts[0], len(b))
 	})
 
+	t.Run("tcg+image", func(t *testing.T) {
+		r := a.Handle("live-tcg", "u1", "wren",
+			"look up the Special Illustration Rare Mega Charizard from Pokémon set me2, tell me its price, and attach the card image so I can see it")
+		t.Logf("tcg reply: %.500s", r.Text)
+		if len(r.Artifacts) == 0 {
+			t.Errorf("expected the card image attached, got none")
+		}
+		if !strings.Contains(strings.ToLower(r.Text), "charizard") {
+			t.Errorf("expected the card named in the reply")
+		}
+	})
+
 	t.Run("dive+search", func(t *testing.T) {
 		r := a.Dive("live-test", "u1", "wren", "what model releases did DeepSeek ship most recently? one line, cite a URL you actually fetched")
 		t.Logf("dive reply: %.600s", r.Text)

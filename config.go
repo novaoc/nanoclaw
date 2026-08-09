@@ -46,6 +46,7 @@ type Config struct {
 	HistoryTurns  int
 	DiveToolIters int // /dive gets a bigger tool budget…
 	DivePasses    int // …and N self-review passes (the looper-model play)
+	BraveKey      string // BRAVE_API_KEY — real search API; falls back to DuckDuckGo scraping
 
 	BankrURL    string // BANKR_API_URL, default https://api.bankr.bot
 	Secret      string // NANOCLAW_SECRET — LOCAL custody only (mutually exclusive with code)
@@ -100,6 +101,7 @@ func LoadConfig() (*Config, error) {
 		HistoryTurns:  24,
 		DiveToolIters: 16,
 		DivePasses:    atoiOr(get("NANOCLAW_DIVE_PASSES", ""), 2),
+		BraveKey:      get("BRAVE_API_KEY", ""),
 		BankrURL:      get("BANKR_API_URL", "https://api.bankr.bot"),
 		Secret:        get("NANOCLAW_SECRET", ""),
 		VaultSocket:   get("CLAWVAULT_SOCKET", ""),

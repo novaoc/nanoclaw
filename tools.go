@@ -68,6 +68,12 @@ func toolDefs(cfg *Config) []ToolDef {
 		mk("attach_image",
 			"Fetch an image by URL and attach it to your Discord reply (e.g. a card image from a tcg lookup, or any picture the user asks to see). Images only, up to 8MB.",
 			`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),
+		mk("price_chart",
+			"Build an INTERACTIVE historical price chart (self-contained HTML, hover for date+price) and attach it to your reply. kind=card|stock|crypto. "+
+				"For a CARD: tcg-lookup it first, then pass game, set, number, and query=<card name> (uses rarebox price history, daily ~90d). "+
+				"For CRYPTO: query=<name/symbol e.g. bitcoin> (CoinGecko). For a STOCK: symbol=<ticker e.g. AAPL> (Yahoo). "+
+				"Optional days (default 30, cards 90). This is neutral price data — not advice.",
+			`{"type":"object","properties":{"kind":{"type":"string","description":"card|stock|crypto"},"game":{"type":"string"},"set":{"type":"string"},"number":{"type":"string"},"symbol":{"type":"string","description":"stock ticker"},"query":{"type":"string","description":"crypto name/symbol, or card display name"},"days":{"type":"integer"}},"required":["kind"]}`),
 	}
 	if cfg.GithubEnabled() { // API only — no shell; gated by NANOCLAW_REPO_USERS (empty = everyone)
 		defs = append(defs, mk("github",
@@ -96,6 +102,8 @@ func toolDefs(cfg *Config) []ToolDef {
 type toolArgs struct {
 	Query, URL, Name, Content, Note, Command, Path, Game, Set          string
 	Action, Description, Repo, Message, Branch, Title, Head, Base, Body string
+	Kind, Number, Symbol                                               string
+	Days                                                               int
 	Private                                                            bool
 }
 
@@ -109,7 +117,7 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// page fetched this turn could drive the model into running commands or
 	// pushing code. The two sides are mutually exclusive per turn (they persist
 	// across the whole dive too).
-	web := name == "web_search" || name == "fetch_url" || name == "tcg"
+	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart"
 	code := name == "shell" || name == "write_file" || name == "read_file" || name == "github"
 	if web && tc.usedCode {
 		return "REFUSED: web fetch blocked — this turn already ran code or a GitHub write, and untrusted page content must not mix with those. Do the browsing in a separate message."
@@ -133,6 +141,9 @@ func (tc *ToolCtx) Run(name, args string) string {
 		return tcgLookup(a.Game, a.Set, a.Query)
 	case "attach_image":
 		return tc.attachImage(a.URL)
+	case "price_chart":
+		tc.usedWeb = true
+		return tc.priceChart(a)
 	case "save_artifact":
 		return tc.saveArtifact(a.Name, a.Content)
 	case "remember":

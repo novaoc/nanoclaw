@@ -64,17 +64,29 @@ func lastDays(pts []pricePoint, days int) []pricePoint {
 	return out
 }
 
-// cardHistory pulls a card's [epochDay,usd] series (best-tracked variant).
+// cardHistory pulls a card's [epochDay,usd] series (best-tracked variant). The
+// history file name and the per-card key are game-specific.
 func cardHistory(game, set, number string, days int) ([]pricePoint, string, error) {
 	game = strings.ToLower(strings.TrimSpace(game))
-	set = strings.ToLower(strings.TrimSpace(set))
+	set = strings.TrimSpace(set)
+	fileSet := strings.ToLower(set)
+	key := rbNormNum(number)
+	if game == "one-piece" || game == "one-piece-ja" {
+		// files are OP-01.json; keys are OP01-003 (set sans dash + 3-digit num)
+		fileSet = strings.ToUpper(set)
+		n := rbNormNum(number)
+		for len(n) < 3 {
+			n = "0" + n
+		}
+		key = strings.ToUpper(strings.ReplaceAll(set, "-", "")) + "-" + n
+	}
 	var doc struct {
 		Cards map[string]map[string][][]float64 `json:"cards"`
 	}
-	if err := rbGet(priceHistBase+"/"+game+"/"+set+".json", &doc); err != nil {
+	if err := rbGet(priceHistBase+"/"+game+"/"+fileSet+".json", &doc); err != nil {
 		return nil, "", fmt.Errorf("no price history for set %q", set)
 	}
-	variants := doc.Cards[rbNormNum(number)]
+	variants := doc.Cards[key]
 	if len(variants) == 0 {
 		return nil, "", fmt.Errorf("no price history for #%s in %s", number, set)
 	}
@@ -187,7 +199,7 @@ func (tc *ToolCtx) priceChart(a toolArgs) string {
 		// History for these games is keyed by collector number; others (one-piece
 		// by card id, riftbound by product id, yugioh by set code) don't align, so
 		// fail fast with a clear message instead of letting the model retry.
-		chartable := map[string]bool{"pokemon": true, "pokemon-ja": true, "mtg": true, "lorcana": true}
+		chartable := map[string]bool{"pokemon": true, "pokemon-ja": true, "mtg": true, "lorcana": true, "one-piece": true, "one-piece-ja": true}
 		if !chartable[strings.ToLower(strings.TrimSpace(a.Game))] {
 			return "chart error: price charts aren't available for " + a.Game + " cards yet (its history isn't keyed by collector number). Give the current price from tcg instead — don't retry the chart."
 		}

@@ -124,12 +124,20 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	content = strings.ReplaceAll(content, "<@!"+s.State.User.ID+">", "")
 	content = strings.TrimSpace(content)
 
-	// Pick up any image attachments for the vision pass.
+	// Pick up any image attachments for the vision pass — from THIS message and,
+	// when it's a reply, from the message it replies to (so "@vela what's this?"
+	// as a reply to a card photo works, not just photo-in-the-same-message).
 	var images []string
-	for _, at := range m.Attachments {
-		if strings.HasPrefix(at.ContentType, "image/") || isImageName(at.Filename) {
-			images = append(images, at.URL)
+	collect := func(atts []*discordgo.MessageAttachment) {
+		for _, at := range atts {
+			if strings.HasPrefix(at.ContentType, "image/") || isImageName(at.Filename) {
+				images = append(images, at.URL)
+			}
 		}
+	}
+	collect(m.Attachments)
+	if m.ReferencedMessage != nil {
+		collect(m.ReferencedMessage.Attachments)
 	}
 	if content == "" {
 		if len(images) > 0 {

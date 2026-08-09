@@ -31,8 +31,8 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentMessageContent |
-		discordgo.IntentsDirectMessages
+	s.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages |
+		discordgo.IntentMessageContent | discordgo.IntentsDirectMessages
 	b := &Bot{cfg: cfg, agent: agent, session: s, locks: make(chan struct{}, cfg.Concurrency)}
 	s.AddHandler(b.onMessage)
 	s.AddHandler(b.onReady)
@@ -43,37 +43,86 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 
 // /dive — the deep-loop skill: clear goal, bigger tool budget, self-review
 // passes. Registered per guild so it appears instantly (global takes ~1h).
-func diveCommand() *discordgo.ApplicationCommand {
-	return &discordgo.ApplicationCommand{
-		Name:        "dive",
-		Description: "Deep loop on a task or research question — goal, iterate, self-review",
-		Options: []*discordgo.ApplicationCommandOption{{
-			Type:        discordgo.ApplicationCommandOptionString,
-			Name:        "task",
-			Description: "What to dive on (a build task, a research question, a mockup)",
-			Required:    true,
-		}},
+func appCommands() []*discordgo.ApplicationCommand {
+	return []*discordgo.ApplicationCommand{
+		{
+			Name:        "dive",
+			Description: "Deep loop on a task or research question — goal, iterate, self-review",
+			Options: []*discordgo.ApplicationCommandOption{{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "task",
+				Description: "What to dive on (a build task, a research question, a mockup)",
+				Required:    true,
+			}},
+		},
+		{
+			Name:        "memory",
+			Description: "View or clear Vela's long-term memory (admins only)",
+			Options: []*discordgo.ApplicationCommandOption{{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "action",
+				Description: "view the notes, or clear them",
+				Required:    true,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "view", Value: "view"},
+					{Name: "clear", Value: "clear"},
+				},
+			}},
+		},
 	}
 }
 
-func (b *Bot) registerDive(s *discordgo.Session, guildID string) {
+func (b *Bot) registerCommands(s *discordgo.Session, guildID string) {
 	// ApplicationCommandCreate is idempotent by name, so re-registering is safe.
-	if _, err := s.ApplicationCommandCreate(s.State.User.ID, guildID, diveCommand()); err != nil {
-		log.Printf("register /dive in %s: %v", guildID, err)
+	for _, c := range appCommands() {
+		if _, err := s.ApplicationCommandCreate(s.State.User.ID, guildID, c); err != nil {
+			log.Printf("register /%s in %s: %v", c.Name, guildID, err)
+		}
 	}
 }
 
 func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 	for _, g := range r.Guilds {
-		b.registerDive(s, g.ID)
+		b.registerCommands(s, g.ID)
 	}
 }
 
-// onGuildCreate registers /dive in guilds the bot joins AFTER startup (onReady
-// only covers guilds present at connect) — and re-covers the initial ones as
-// they become available.
+// onGuildCreate registers commands in guilds the bot joins AFTER startup (onReady
+// only covers guilds present at connect) — needs the Guilds intent to fire.
 func (b *Bot) onGuildCreate(s *discordgo.Session, g *discordgo.GuildCreate) {
-	b.registerDive(s, g.ID)
+	b.registerCommands(s, g.ID)
+}
+
+func ephemeral(s *discordgo.Session, i *discordgo.InteractionCreate, text string) {
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Content: text, Flags: discordgo.MessageFlagsEphemeral},
+	})
+}
+
+// onMemoryCommand handles /memory — admin-only (coder allowlist), so poisoned
+// notes are discoverable and purgeable instead of silently steering the bot.
+func (b *Bot) onMemoryCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	_, uid := interactionUser(i)
+	if !b.cfg.Coders[uid] {
+		ephemeral(s, i, "That's admin-only (the coder allowlist). Ask Aregus.")
+		return
+	}
+	switch i.ApplicationCommandData().Options[0].StringValue() {
+	case "clear":
+		if err := clearMemory(b.cfg); err != nil {
+			ephemeral(s, i, "Couldn't clear it: "+err.Error())
+			return
+		}
+		ephemeral(s, i, "🧹 Long-term memory wiped.")
+	default: // view
+		m := strings.TrimSpace(fullMemory(b.cfg))
+		if m == "" {
+			ephemeral(s, i, "Memory is empty.")
+			return
+		}
+		ephemeral(s, i, "```\n"+clip(m, 1800)+"\n```")
+	}
 }
 
 func interactionUser(i *discordgo.InteractionCreate) (name, id string) {
@@ -90,7 +139,12 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	if i.Type != discordgo.InteractionApplicationCommand {
 		return
 	}
-	if i.ApplicationCommandData().Name != "dive" {
+	switch i.ApplicationCommandData().Name {
+	case "memory":
+		b.onMemoryCommand(s, i)
+		return
+	case "dive":
+	default:
 		return
 	}
 	task := i.ApplicationCommandData().Options[0].StringValue()

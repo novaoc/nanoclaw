@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -44,7 +45,7 @@ func imageToDataURI(url string) (string, error) {
 // describeImages runs the vision model over the attachments and returns a
 // factual description tuned to the request. Best-effort: any failure returns
 // "" (logged) so a bad image never blocks the text reply.
-func (a *Agent) describeImages(request string, imageURLs []string) string {
+func (a *Agent) describeImages(ctx context.Context, request string, imageURLs []string) string {
 	var uris []string
 	for _, u := range imageURLs {
 		du, err := imageToDataURI(u)
@@ -57,7 +58,7 @@ func (a *Agent) describeImages(request string, imageURLs []string) string {
 	if len(uris) == 0 {
 		return ""
 	}
-	desc, err := a.llm.Vision(a.cfg.VisionModel, fmt.Sprintf(visionPrompt, request), uris)
+	desc, err := a.llm.Vision(ctx, a.cfg.VisionModel, fmt.Sprintf(visionPrompt, request), uris)
 	if err != nil {
 		log.Printf("vision: %v", err)
 		return ""

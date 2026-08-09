@@ -53,6 +53,25 @@ func appendMemory(cfg *Config, note string) string {
 	return "remembered"
 }
 
+// fullMemory returns the whole MEMORY.md (for an admin to inspect for poisoning).
+func fullMemory(cfg *Config) string {
+	memMu.Lock()
+	defer memMu.Unlock()
+	b, _ := os.ReadFile(memoryPath(cfg))
+	return string(b)
+}
+
+// clearMemory wipes long-term memory (admin action).
+func clearMemory(cfg *Config) error {
+	memMu.Lock()
+	defer memMu.Unlock()
+	err := os.Remove(memoryPath(cfg))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 // ── per-channel history ────────────────────────────────────────────────
 
 type History struct {

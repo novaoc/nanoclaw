@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -93,17 +94,18 @@ func NewLLM(cfg *Config) *LLM {
 	}
 }
 
-func (l *LLM) Chat(messages []Msg, tools []ToolDef) (*Msg, error) {
+func (l *LLM) Chat(ctx context.Context, messages []Msg, tools []ToolDef) (*Msg, error) {
 	body, err := json.Marshal(chatRequest{Model: l.model, Messages: messages, Tools: tools, MaxTok: 4096})
 	if err != nil {
 		return nil, err
 	}
-	return l.post(body)
+	return l.post(ctx, body)
 }
 
 // post sends a pre-marshalled chat/completions body and retries transient
-// failures. Shared by Chat (tool loop) and Vision (multimodal one-shot).
-func (l *LLM) post(body []byte) (*Msg, error) {
+// failures. The per-turn ctx bounds total time so a hung upstream can't hold
+// the turn (and its concurrency slot) indefinitely. Shared by Chat and Vision.
+func (l *LLM) post(ctx context.Context, body []byte) (*Msg, error) {
 	// Inference providers 429/503 under load routinely — retry with backoff
 	// instead of surfacing a transient blip to the channel.
 	var lastErr error
@@ -111,7 +113,10 @@ func (l *LLM) post(body []byte) (*Msg, error) {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt*attempt) * 2 * time.Second) // 2s, 8s, 18s
 		}
-		req, err := http.NewRequest("POST", l.baseURL+"/chat/completions", bytes.NewReader(body))
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("turn deadline reached: %w", ctx.Err())
+		}
+		req, err := http.NewRequestWithContext(ctx, "POST", l.baseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
@@ -152,7 +157,7 @@ func (l *LLM) post(body []byte) (*Msg, error) {
 // model is a reasoner that can think past the token budget and return EMPTY
 // content (finish_reason "length"); we cap its thinking so the answer always
 // lands, and still give the overall response generous room.
-func (l *LLM) Vision(model, prompt string, imageURLs []string) (string, error) {
+func (l *LLM) Vision(ctx context.Context, model, prompt string, imageURLs []string) (string, error) {
 	parts := []visionPart{{Type: "text", Text: prompt}}
 	for _, u := range imageURLs {
 		parts = append(parts, visionPart{Type: "image_url", ImageURL: &visionImgURL{URL: u}})
@@ -166,7 +171,7 @@ func (l *LLM) Vision(model, prompt string, imageURLs []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	msg, err := l.post(body)
+	msg, err := l.post(ctx, body)
 	if err != nil {
 		return "", err
 	}

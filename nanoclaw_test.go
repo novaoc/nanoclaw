@@ -390,6 +390,33 @@ func TestCodeCapabilityGating(t *testing.T) {
 	}
 }
 
+// Web fetches and code execution must be mutually exclusive within a turn,
+// so a poisoned page can't inject the shell commands the model then runs.
+func TestWebCodeInjectionGuard(t *testing.T) {
+	cfg := testCfg(t)
+	cfg.Coders = map[string]bool{"dev": true}
+	cfg.Workspace = t.TempDir()
+
+	// fetch-then-shell: the shell must be refused
+	tc := &ToolCtx{cfg: cfg, authorID: "dev"}
+	_ = tc.Run("web_search", `{"query":"anything"}`) // may error at network; sets usedWeb
+	if !tc.usedWeb {
+		t.Fatal("web_search should mark the turn as web-touched")
+	}
+	if out := tc.Run("shell", `{"command":"echo hi"}`); !strings.Contains(out, "REFUSED") {
+		t.Fatalf("shell after a web fetch must be refused: %s", out)
+	}
+
+	// shell-then-fetch: the fetch must be refused
+	tc2 := &ToolCtx{cfg: cfg, authorID: "dev"}
+	if out := tc2.Run("shell", `{"command":"echo hi"}`); strings.Contains(out, "REFUSED") {
+		t.Fatalf("first shell should run, got: %s", out)
+	}
+	if out := tc2.Run("fetch_url", `{"url":"https://example.com"}`); !strings.Contains(out, "REFUSED") {
+		t.Fatalf("fetch after shell must be refused: %s", out)
+	}
+}
+
 func TestSSRFBlocking(t *testing.T) {
 	blocked := []string{"127.0.0.1", "10.0.0.5", "192.168.1.1", "172.16.0.1",
 		"169.254.1.1", "0.0.0.0", "100.100.0.1", "::1", "fe80::1"}

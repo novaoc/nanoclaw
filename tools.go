@@ -30,6 +30,8 @@ type ToolCtx struct {
 	channelID string         // where to post a vault confirm button
 	Artifacts []string       // file paths saved this turn
 	Pending   *PendingAction // local-mode action awaiting the user's button click
+	usedWeb   bool           // this turn touched the web (fetch/search)
+	usedCode  bool           // this turn ran code (shell/file) — mutually exclusive with web
 }
 
 // clip truncates on a UTF-8 rune boundary so we never split a character.
@@ -69,7 +71,7 @@ func toolDefs(cfg *Config) []ToolDef {
 	if cfg.CodeEnabled() { // off while this process holds wallet keys (interlock)
 		defs = append(defs,
 			mk("shell",
-				"Run a shell command in your code workspace (persists across turns). Use for git (clone/commit/push to your GitHub), installing libraries, running builds/tests, scaffolding. 180s timeout. You run on a 256MB single-core RISC-V board — keep it light; for heavy builds, push and let CI compile.",
+				"Run a shell command in your code workspace (persists across turns). Use for git (clone/commit/push to your GitHub), installing libraries, running builds/tests, scaffolding. 180s timeout. You run on a 256MB single-core RISC-V board — keep it light; for heavy builds, push and let CI compile. NOTE: code and web fetches can't run in the same turn (injection guard) — if you need to research first, do it in a separate message, then run code.",
 				`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`),
 			mk("write_file",
 				"Write a file in your workspace (creates dirs). Prefer this over shell heredocs for writing code.",
@@ -95,10 +97,25 @@ func (tc *ToolCtx) Run(name, args string) string {
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "tool error: bad arguments: " + err.Error()
 	}
+	// Injection guard: untrusted web content and code execution must never
+	// coexist in one turn, or a poisoned page fetched this turn could inject
+	// the shell commands the model then runs. The two sides are mutually
+	// exclusive per turn (they persist across the whole dive too).
+	web := name == "web_search" || name == "fetch_url"
+	code := name == "shell" || name == "write_file" || name == "read_file"
+	if web && tc.usedCode {
+		return "REFUSED: web fetch blocked — this turn already ran code, and untrusted page content must not mix with code execution. Do the browsing in a separate message."
+	}
+	if code && tc.usedWeb {
+		return "REFUSED: code blocked — this turn already fetched from the web, and a fetched page must not be able to reach a shell (prompt-injection guard). Run code in a separate message from any browsing."
+	}
+
 	switch name {
 	case "web_search":
+		tc.usedWeb = true
 		return webSearch(a.Query)
 	case "fetch_url":
+		tc.usedWeb = true
 		return fetchURL(a.URL)
 	case "save_artifact":
 		return tc.saveArtifact(a.Name, a.Content)
@@ -107,10 +124,13 @@ func (tc *ToolCtx) Run(name, args string) string {
 	case "bankr":
 		return tc.runBankr(a.Prompt)
 	case "shell":
+		tc.usedCode = true
 		return tc.runShell(a.Command)
 	case "write_file":
+		tc.usedCode = true
 		return tc.writeWorkspaceFile(a.Path, a.Content)
 	case "read_file":
+		tc.usedCode = true
 		return tc.readWorkspaceFile(a.Path)
 	}
 	return "tool error: unknown tool " + name

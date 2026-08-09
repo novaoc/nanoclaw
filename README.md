@@ -155,6 +155,22 @@ the secret. That split — plus signed-tag deploys and box hardening — is the
 architecture in [CLAWVAULT.md](CLAWVAULT.md); the interlock ships today so
 there's no unsafe window.
 
+**Injection guard.** Web fetches (`web_search`/`fetch_url`) and code execution
+(`shell`/`write_file`/`read_file`) are mutually exclusive *within a single
+turn*: once a turn has touched the web, code is refused for that turn, and vice
+versa. A page fetched this turn therefore can't inject the shell commands the
+model then runs. Research in one message, run code in the next.
+
+**⚠️ Deploy sequencing — do this before enabling coders in production.** A
+coder shell can read `GITHUB_TOKEN` from the environment and push whatever it
+likes; only the **signed-tag deploy gate** makes such a push inert (the Nano
+runs only binaries you signed). So: **do not set `NANOCLAW_CODERS` in
+production until signed-tag verification is live on the box.** And scope the
+token to blast radius — a **fine-grained PAT limited to Vela's own repos,
+contents + pull-request write only, no admin**, treated as rotatable. Then a
+stolen token costs embarrassment, not infrastructure. nanoclaw logs this
+reminder at startup when code + a token are both configured.
+
 **Hardware reality — she's a 22×36 mm board, not a build server.** The
 LicheeRV Nano is one ~1 GHz RISC-V core + **256 MB RAM**. Great for git, small
 scripts, config, and lightweight installs; a big `npm install`, a from-source

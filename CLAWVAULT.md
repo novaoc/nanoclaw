@@ -79,6 +79,20 @@ own the nanoclaw process) can no longer read a key, skip a confirmation, or
 exceed a cap. The boundary moves from "the model behaved" to "a human signed
 it, and a small daemon enforces it."
 
+**Residual, stated precisely.** The socket trusts the `uid` in each request —
+nanoclaw is the only client and supplies it from the Discord author. So a
+*fully compromised* nanoclaw could forge a uid to (a) **read** any connected
+user's balances/portfolio — a privacy leak, not key or fund loss, and every
+read is uid-stamped in the audit log; or (b) queue a write as some user, which
+spam-posts a Confirm button at them — but execution still requires *their*
+click, verified here against the real interaction, so it's social engineering
+that needs a victim to fall for it, never silent theft. What a compromised
+nanoclaw still cannot do: learn a key, execute a transaction without the
+owner's click, or exceed the per-user write cap (a minor race can exceed it by
+the number of near-simultaneous *clicked* executes — human-paced, bounded by
+one-shot tokens). "Can't drain or exfiltrate keys" is exact; "can't read
+balances" is not — hence this note.
+
 ## Status
 
 **Built.** `clawvault/` is the daemon: own keystore (AES-GCM, uid as AAD,

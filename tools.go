@@ -69,7 +69,7 @@ func toolDefs(cfg *Config) []ToolDef {
 			"Fetch an image by URL and attach it to your Discord reply (e.g. a card image from a tcg lookup, or any picture the user asks to see). Images only, up to 8MB.",
 			`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),
 		mk("price_chart",
-			"Build an INTERACTIVE historical price chart (self-contained HTML, hover for date+price) and attach it to your reply. kind=card|stock|crypto. "+
+			"Build a historical price chart IMAGE (a PNG that displays inline in Discord) and attach it to your reply. kind=card|stock|crypto. "+
 				"For a CARD: tcg-lookup it first, then pass game, set, number, and query=<card name> (uses rarebox price history, daily ~90d). "+
 				"For CRYPTO: query=<name/symbol e.g. bitcoin> (CoinGecko). For a STOCK: symbol=<ticker e.g. AAPL> (Yahoo). "+
 				"Optional days (default 30, cards 90). This is neutral price data — not advice.",

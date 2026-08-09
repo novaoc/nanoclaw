@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -14,9 +16,15 @@ type Bot struct {
 	cfg     *Config
 	agent   *Agent
 	session *discordgo.Session
-	// serialize turns per channel so parallel questions don't interleave
-	locks chan struct{}
+	// global turn semaphore (cap = cfg.Concurrency, default 1) — how many turns
+	// run at once, RAM-safe on the Nano; others queue on it.
+	locks   chan struct{}
+	pending int32 // in-flight + queued turns, to cap a spam pile-up (maxPending)
 }
+
+// maxPending bounds queued goroutines so a message flood can't OOM the 128 MB
+// board — past this, new messages get a 🚫 react instead of piling up.
+const maxPending = 24
 
 func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 	s, err := discordgo.New("Bot " + cfg.DiscordToken)
@@ -28,14 +36,15 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 	b := &Bot{cfg: cfg, agent: agent, session: s, locks: make(chan struct{}, cfg.Concurrency)}
 	s.AddHandler(b.onMessage)
 	s.AddHandler(b.onReady)
+	s.AddHandler(b.onGuildCreate)
 	s.AddHandler(b.onInteraction)
 	return b, nil
 }
 
 // /dive — the deep-loop skill: clear goal, bigger tool budget, self-review
 // passes. Registered per guild so it appears instantly (global takes ~1h).
-func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
-	cmds := []*discordgo.ApplicationCommand{{
+func diveCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
 		Name:        "dive",
 		Description: "Deep loop on a task or research question — goal, iterate, self-review",
 		Options: []*discordgo.ApplicationCommandOption{{
@@ -44,14 +53,27 @@ func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 			Description: "What to dive on (a build task, a research question, a mockup)",
 			Required:    true,
 		}},
-	}}
-	for _, g := range r.Guilds {
-		for _, cmd := range cmds {
-			if _, err := s.ApplicationCommandCreate(s.State.User.ID, g.ID, cmd); err != nil {
-				log.Printf("register /%s in %s: %v", cmd.Name, g.ID, err)
-			}
-		}
 	}
+}
+
+func (b *Bot) registerDive(s *discordgo.Session, guildID string) {
+	// ApplicationCommandCreate is idempotent by name, so re-registering is safe.
+	if _, err := s.ApplicationCommandCreate(s.State.User.ID, guildID, diveCommand()); err != nil {
+		log.Printf("register /dive in %s: %v", guildID, err)
+	}
+}
+
+func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
+	for _, g := range r.Guilds {
+		b.registerDive(s, g.ID)
+	}
+}
+
+// onGuildCreate registers /dive in guilds the bot joins AFTER startup (onReady
+// only covers guilds present at connect) — and re-covers the initial ones as
+// they become available.
+func (b *Bot) onGuildCreate(s *discordgo.Session, g *discordgo.GuildCreate) {
+	b.registerDive(s, g.ID)
 }
 
 func interactionUser(i *discordgo.InteractionCreate) (name, id string) {
@@ -147,7 +169,13 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
+	if atomic.LoadInt32(&b.pending) >= maxPending {
+		_ = s.MessageReactionAdd(m.ChannelID, m.ID, "🚫") // overloaded — don't pile up
+		return
+	}
+	atomic.AddInt32(&b.pending, 1)
 	go func() {
+		defer atomic.AddInt32(&b.pending, -1)
 		// One turn at a time by default (RAM-safe on the Nano). If she's busy,
 		// queue this one — and drop an ⏳ on the message so they know they're in
 		// line rather than being ignored.
@@ -226,6 +254,9 @@ func splitMessage(s string, max int) []string {
 		cut := strings.LastIndex(s[:max], "\n")
 		if cut < max/2 {
 			cut = max
+			for cut > 0 && !utf8.RuneStart(s[cut]) { // don't split a multi-byte rune
+				cut--
+			}
 		}
 		out = append(out, strings.TrimRight(s[:cut], "\n"))
 		s = strings.TrimLeft(s[cut:], "\n")

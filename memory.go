@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Persistence, MimiClaw-style but on a 128 GB microSD instead of 16 MB
@@ -27,7 +28,11 @@ func readMemory(cfg *Config) string {
 	}
 	s := string(b)
 	if len(s) > 4000 { // cap what rides the prompt; the full file stays on SD
-		s = "…" + s[len(s)-4000:]
+		n := len(s) - 4000
+		for n < len(s) && !utf8.RuneStart(s[n]) { // don't start mid-rune
+			n++
+		}
+		s = "…" + s[n:]
 	}
 	return s
 }
@@ -39,7 +44,7 @@ func appendMemory(cfg *Config, note string) string {
 	}
 	memMu.Lock()
 	defer memMu.Unlock()
-	f, err := os.OpenFile(memoryPath(cfg), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(memoryPath(cfg), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "memory error: " + err.Error()
 	}
@@ -89,6 +94,6 @@ func (h *History) Append(ch string, exchange ...Msg) {
 	}
 	h.byCh[ch] = m
 	if b, err := json.Marshal(m); err == nil {
-		_ = os.WriteFile(h.path(ch), b, 0o644)
+		_ = os.WriteFile(h.path(ch), b, 0o600)
 	}
 }

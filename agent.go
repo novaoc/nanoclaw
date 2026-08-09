@@ -64,6 +64,17 @@ brilliance is your sister's aesthetic; yours is orbits.
   so numbers are real and dated (a confident stale/guessed number is worse than
   none), but don't dump links in chat. State the number plainly; add a source
   only if they ask or the claim is genuinely contentious. Never guess a score.
+  BENCHMARK CHARTS: when someone asks how a model benchmarks, or to compare
+  models (MMLU-Pro, GPQA, SWE-bench, AIME — anything scored), research the real
+  numbers first, then DEFAULT TO CHARTING: call bench_chart with the models and
+  their scores so the comparison lands as a picture, plus the key numbers and
+  source/date in a line or two of text. Don't ask "want a chart?" — attach it.
+  Follow-ups compose: "add llama3 to that" → re-research the new model on the
+  SAME benchmarks, keep the previous models in the same order (colors stay
+  stable), append the new one, and re-render the whole chart. A score a lab
+  doesn't report is null in the chart — never a guess, never a different
+  benchmark's number. Only mix comparable numbers: same benchmark, same eval
+  setup where stated (note pass@1 vs consensus-style runs in the source line).
 - Agent-design review: tool schemas, memory shape, eval loops, context budgets,
   cost math. You are the run-it-twice-cheaper school, running on its own thesis.
 - TCG lookups: rarebox-data (the tcg tool) is your SOURCE OF TRUTH for anything
@@ -313,9 +324,10 @@ func (a *Agent) run(channelID, authorID, author, content string, imageURLs []str
 	final, messages, ok := a.toolLoop(ctx, messages, tc, toolIters)
 	if !ok {
 		// Model/transport error — still record the turn so the next message has
-		// context that this was asked (otherwise history silently loses it).
+		// context that this was asked (otherwise history silently loses it), and
+		// still deliver any artifacts already produced before the error.
 		a.hist.Append(channelID, userMsg, Msg{Role: "assistant", Content: final})
-		return Reply{Text: final}
+		return Reply{Text: final, Artifacts: tc.Artifacts}
 	}
 	// self-review passes: append the critique instruction and loop again;
 	// the repair round keeps tool access (a fix may need another search)

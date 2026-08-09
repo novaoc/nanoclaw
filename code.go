@@ -51,6 +51,7 @@ func (tc *ToolCtx) runShell(command string) string {
 	if g := tc.codeGate(); g != "" {
 		return g
 	}
+	tc.usedCode = true
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return "shell error: empty command"
@@ -79,6 +80,7 @@ func (tc *ToolCtx) writeWorkspaceFile(path, content string) string {
 	if g := tc.codeGate(); g != "" {
 		return g
 	}
+	tc.usedCode = true
 	full, err := tc.resolveWorkspace(path)
 	if err != nil {
 		return "write error: " + err.Error()
@@ -96,6 +98,7 @@ func (tc *ToolCtx) readWorkspaceFile(path string) string {
 	if g := tc.codeGate(); g != "" {
 		return g
 	}
+	tc.usedCode = true
 	full, err := tc.resolveWorkspace(path)
 	if err != nil {
 		return "read error: " + err.Error()

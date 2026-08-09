@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -18,6 +19,17 @@ import (
 // Vela's own token and act as her account; every call is audit-logged.
 
 const ghAPI = "https://api.github.com"
+
+// ghEsc escapes a repo path or branch name segment-by-segment (slashes kept),
+// so a name containing '#', '?', or spaces can't be reinterpreted as URL
+// syntax — "notes#1.md" must write notes#1.md, not silently commit to "notes".
+func ghEsc(p string) string {
+	segs := strings.Split(p, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return strings.Join(segs, "/")
+}
 
 // runGithub is the tool entry point: allowlist gate, then dispatch. It runs no
 // code on the box — only GitHub API writes as Vela's account — so it's open to
@@ -30,6 +42,7 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 	if gh == nil {
 		return "github isn't configured on this instance (no token)."
 	}
+	tc.usedCode = true // only once past the gates — a REFUSED call ran nothing
 	log.Printf("github action=%s by=%s repo=%.60q name=%.40q path=%.60q",
 		a.Action, tc.authorID, a.Repo, a.Name, a.Path)
 	switch a.Action {
@@ -164,7 +177,7 @@ func (g *ghClient) ensureBranch(owner, repo, branch string) error {
 	if branch == "" {
 		return nil
 	}
-	if _, st, _ := g.do("GET", fmt.Sprintf("/repos/%s/%s/branches/%s", owner, repo, branch), nil); st == 200 {
+	if _, st, _ := g.do("GET", fmt.Sprintf("/repos/%s/%s/branches/%s", owner, repo, ghEsc(branch)), nil); st == 200 {
 		return nil
 	}
 	info, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s", owner, repo), nil)
@@ -175,7 +188,7 @@ func (g *ghClient) ensureBranch(owner, repo, branch string) error {
 		return errors.New(ghErr(info, st))
 	}
 	def, _ := info["default_branch"].(string)
-	ref, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s/git/ref/heads/%s", owner, repo, def), nil)
+	ref, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s/git/ref/heads/%s", owner, repo, ghEsc(def)), nil)
 	if err != nil {
 		return err
 	}
@@ -215,10 +228,10 @@ func (g *ghClient) putFile(repo, path, content, message, branch string) string {
 	// existing file? need its sha to update
 	q := ""
 	if branch != "" {
-		q = "?ref=" + branch
+		q = "?ref=" + url.QueryEscape(branch)
 	}
 	sha := ""
-	if cur, st, _ := g.do("GET", fmt.Sprintf("/repos/%s/%s/contents/%s%s", owner, repo, path, q), nil); st == 200 {
+	if cur, st, _ := g.do("GET", fmt.Sprintf("/repos/%s/%s/contents/%s%s", owner, repo, ghEsc(path), q), nil); st == 200 {
 		sha, _ = cur["sha"].(string)
 	}
 	if message == "" {
@@ -234,7 +247,7 @@ func (g *ghClient) putFile(repo, path, content, message, branch string) string {
 	if sha != "" {
 		payload["sha"] = sha
 	}
-	m, st, err := g.do("PUT", fmt.Sprintf("/repos/%s/%s/contents/%s", owner, repo, path), payload)
+	m, st, err := g.do("PUT", fmt.Sprintf("/repos/%s/%s/contents/%s", owner, repo, ghEsc(path)), payload)
 	if err != nil {
 		return "github error: " + err.Error()
 	}

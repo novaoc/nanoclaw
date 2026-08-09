@@ -160,11 +160,20 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	}
 	task := i.ApplicationCommandData().Options[0].StringValue()
 	author, authorID := interactionUser(i)
+	// dives queue on the same semaphore as messages, so they must respect the
+	// same OOM guard — unbounded /dive spam would pile up goroutines just like
+	// a message flood.
+	if atomic.LoadInt32(&b.pending) >= maxPending {
+		ephemeral(s, i, "🚫 I'm at my queue limit right now — try the dive again in a minute.")
+		return
+	}
+	atomic.AddInt32(&b.pending, 1)
 	// dives run long — defer now, follow up when the loop lands
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 	})
 	go func() {
+		defer atomic.AddInt32(&b.pending, -1)
 		b.locks <- struct{}{}
 		defer func() { <-b.locks }()
 		reply := b.agent.Dive(i.ChannelID, authorID, author, task)
@@ -182,7 +191,12 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 				}
 			}
 			if _, err := s.FollowupMessageCreate(i.Interaction, true, params); err != nil {
-				log.Printf("dive followup: %v", err)
+				// interaction tokens die after 15 min — a dive queued behind long
+				// turns can outlive one. Don't swallow the finished work: post the
+				// rest as a normal channel message instead.
+				log.Printf("dive followup: %v — falling back to a channel message", err)
+				b.send(i.ChannelID, nil, Reply{Text: strings.Join(chunks[n:], "\n"), Artifacts: reply.Artifacts})
+				return
 			}
 		}
 	}()

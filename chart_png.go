@@ -8,6 +8,7 @@ import (
 	"image/draw"
 	"image/png"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,6 +73,15 @@ func withCommas(s string) string {
 }
 
 func chartMoney(v float64) string {
+	if av := math.Abs(v); av > 0 && av < 0.0001 {
+		// micro-priced tokens (SHIB-class): %.4g would print "$1.234e-05" —
+		// use fixed-point with 4 significant digits instead
+		dec := int(math.Ceil(-math.Log10(av))) + 3
+		if dec > 12 {
+			dec = 12
+		}
+		return "$" + strconv.FormatFloat(v, 'f', dec, 64)
+	}
 	if v < 10 {
 		return fmt.Sprintf("$%.4g", v)
 	}
@@ -134,7 +144,11 @@ func renderChartPNG(title, sub string, pts []pricePoint) []byte {
 	if pad == 0 {
 		pad = math.Abs(ymax)*0.08 + 1
 	}
+	rawMin := ymin
 	ymin, ymax = ymin-pad, ymax+pad
+	if rawMin >= 0 && ymin < 0 {
+		ymin = 0 // padding must not invent negative prices on the axis
+	}
 	X := func(ms int64) int {
 		if x1ms == x0ms {
 			return PL

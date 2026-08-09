@@ -27,6 +27,7 @@ Discord message ──► gateway (discordgo) ──► agent loop (DeepSeek too
    read by a vision model)                  │  fetch_url    (read a source)
                                             │  tcg          (rarebox-data cards + prices)
                                             │  price_chart  (card/stock/crypto → PNG chart)
+                                            │  bench_chart  (LLM benchmark bars → PNG chart)
                                             │  attach_image (post an image)
                                             │  github       (create repo / PR — API, no shell)
                                             │  shell/write/read_file  (coder allowlist)
@@ -179,6 +180,16 @@ whenever a chart is available, not only when asked:
 - **Crypto** → CoinGecko. **Stocks** → Yahoo Finance. All keyless.
 
 > **@vela** chart the Prismatic Umbreon · **@vela** bitcoin last 3 months · **@vela** TSLA
+
+**Benchmark charts (`bench_chart`).** Ask how a model benchmarks — or to compare
+models — and she researches the real, dated scores on the web first, then renders
+a **grouped-bar PNG** (models × benchmarks, colorblind-safe palette) and posts it
+alongside the numbers. It's fully custom and composable: follow up with "add
+llama3 to that" and she re-researches, keeps the existing models (and their
+colors) in place, and re-renders with the newcomer appended. A score a lab
+doesn't report shows as an explicit `n/a` tick — never a guessed bar.
+
+> **@vela** how does deepseek v4 benchmark against gpt-5.2? · **@vela** add llama3 to that chart
 
 `web_search` uses the **Brave Search API** when `BRAVE_API_KEY` is set (a real
 JSON API), and **falls back to DuckDuckGo** on any Brave error/quota, not just

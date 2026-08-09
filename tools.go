@@ -74,6 +74,12 @@ func toolDefs(cfg *Config) []ToolDef {
 				"For CRYPTO: query=<name/symbol e.g. bitcoin> (CoinGecko). For a STOCK: symbol=<ticker e.g. AAPL> (Yahoo). "+
 				"Optional days (default 30, cards 90). This is neutral price data — not advice.",
 			`{"type":"object","properties":{"kind":{"type":"string","description":"card|stock|crypto"},"game":{"type":"string"},"set":{"type":"string"},"number":{"type":"string"},"symbol":{"type":"string","description":"stock ticker"},"query":{"type":"string","description":"crypto name/symbol, or card display name"},"days":{"type":"integer"}},"required":["kind"]}`),
+		mk("bench_chart",
+			"Render an LLM benchmark comparison as a grouped-bar chart IMAGE (a PNG that displays inline in Discord) attached to your reply. "+
+				"Use AFTER researching real, dated scores with web_search/fetch_url — you pass the numbers in; NEVER guess a score. "+
+				"scores align 1:1 with benchmarks; use null where a model doesn't report that benchmark. "+
+				"Keep model order stable across re-renders (append newly requested models at the end) so each model keeps its color.",
+			`{"type":"object","properties":{"title":{"type":"string","description":"chart title, e.g. 'DeepSeek-V4 vs Llama 3.1 405B'"},"source":{"type":"string","description":"short provenance note with a date, e.g. 'vendor model cards · Aug 2026'"},"benchmarks":{"type":"array","items":{"type":"string"},"description":"benchmark names, e.g. MMLU-Pro, GPQA Diamond, SWE-bench Verified (max 10)"},"models":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"scores":{"type":"array","items":{"type":["number","null"]}}},"required":["name","scores"]},"description":"one entry per model (max 8), scores aligned to benchmarks"}},"required":["benchmarks","models"]}`),
 	}
 	if cfg.GithubEnabled() { // API only — no shell; gated by NANOCLAW_REPO_USERS (empty = everyone)
 		defs = append(defs, mk("github",
@@ -102,9 +108,11 @@ func toolDefs(cfg *Config) []ToolDef {
 type toolArgs struct {
 	Query, URL, Name, Content, Note, Command, Path, Game, Set          string
 	Action, Description, Repo, Message, Branch, Title, Head, Base, Body string
-	Kind, Number, Symbol                                               string
+	Kind, Number, Symbol, Source                                       string
 	Days                                                               int
 	Private                                                            bool
+	Benchmarks                                                         []string
+	Models                                                             []benchModel
 }
 
 func (tc *ToolCtx) Run(name, args string) string {
@@ -117,7 +125,10 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// page fetched this turn could drive the model into running commands or
 	// pushing code. The two sides are mutually exclusive per turn (they persist
 	// across the whole dive too).
-	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart"
+	// attach_image counts as web: its bytes never reach the model, but it IS an
+	// arbitrary outbound GET — after a code turn (which can read env/tokens) it
+	// would otherwise be an exfiltration channel via the URL.
+	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart" || name == "attach_image"
 	code := name == "shell" || name == "write_file" || name == "read_file" || name == "github"
 	if web && tc.usedCode {
 		return "REFUSED: web fetch blocked — this turn already ran code or a GitHub write, and untrusted page content must not mix with those. Do the browsing in a separate message."
@@ -140,25 +151,29 @@ func (tc *ToolCtx) Run(name, args string) string {
 		tc.usedWeb = true
 		return tcgLookup(a.Game, a.Set, a.Query)
 	case "attach_image":
+		tc.usedWeb = true
 		return tc.attachImage(a.URL)
 	case "price_chart":
 		tc.usedWeb = true
 		return tc.priceChart(a)
+	case "bench_chart":
+		// renders only from the args the model passes — no fetch, so it's
+		// neither a web nor a code action for the injection guard
+		return tc.benchChart(a)
 	case "save_artifact":
 		return tc.saveArtifact(a.Name, a.Content)
 	case "remember":
 		return appendMemory(tc.cfg, a.Note)
+	// The code handlers set usedCode themselves AFTER their allowlist gates
+	// pass — a REFUSED call ran nothing, so it must not poison the rest of the
+	// turn (blocking every later web tool with "this turn already ran code").
 	case "github":
-		tc.usedCode = true
 		return tc.runGithub(a)
 	case "shell":
-		tc.usedCode = true
 		return tc.runShell(a.Command)
 	case "write_file":
-		tc.usedCode = true
 		return tc.writeWorkspaceFile(a.Path, a.Content)
 	case "read_file":
-		tc.usedCode = true
 		return tc.readWorkspaceFile(a.Path)
 	}
 	return "tool error: unknown tool " + name
@@ -360,7 +375,7 @@ func (tc *ToolCtx) saveArtifact(name, content string) string {
 		return fmt.Sprintf("artifact error: too large (%d bytes, max %d) — trim it or split it", len(content), maxArtifactBytes)
 	}
 	path := filepath.Join(tc.cfg.DataDir, "artifacts",
-		fmt.Sprintf("%d-%s", time.Now().Unix(), name))
+		fmt.Sprintf("%d-%s", time.Now().UnixNano(), name))
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "artifact error: " + err.Error()
 	}
@@ -391,7 +406,13 @@ func (tc *ToolCtx) attachImage(u string) string {
 		return fmt.Sprintf("image error: http %d", resp.StatusCode)
 	}
 	ct := strings.TrimSpace(strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0])
-	return tc.saveImage(filepath.Base(u), ct, resp.Body)
+	// name from the URL PATH only — a query string ("card.png?ex=…") would
+	// otherwise end up inside the filename and break inline display in Discord
+	name := u
+	if p, err := url.Parse(u); err == nil && p.Path != "" {
+		name = p.Path
+	}
+	return tc.saveImage(filepath.Base(name), ct, resp.Body)
 }
 
 // saveImage validates the content-type, caps the size, and attaches — split
@@ -399,7 +420,8 @@ func (tc *ToolCtx) attachImage(u string) string {
 func (tc *ToolCtx) saveImage(name, contentType string, body io.Reader) string {
 	ext, ok := imageExt[contentType]
 	if !ok {
-		return "image error: not an image (content-type " + contentType + ")"
+		// %q + cap: the header is attacker-controlled text headed for model context
+		return fmt.Sprintf("image error: not an image (content-type %.60q)", contentType)
 	}
 	data, err := io.ReadAll(io.LimitReader(body, maxImageBytes+1))
 	if err != nil {
@@ -412,7 +434,7 @@ func (tc *ToolCtx) saveImage(name, contentType string, body io.Reader) string {
 	if !strings.Contains(base, ".") {
 		base += ext
 	}
-	path := filepath.Join(tc.cfg.DataDir, "artifacts", fmt.Sprintf("%d-%s", time.Now().Unix(), base))
+	path := filepath.Join(tc.cfg.DataDir, "artifacts", fmt.Sprintf("%d-%s", time.Now().UnixNano(), base))
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "image error: " + err.Error()
 	}

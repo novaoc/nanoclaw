@@ -225,12 +225,12 @@ func (tc *ToolCtx) priceChart(a toolArgs) string {
 		// History for these games is keyed by collector number; others (one-piece
 		// by card id, riftbound by product id, yugioh by set code) don't align, so
 		// fail fast with a clear message instead of letting the model retry.
+		if a.Game == "" || a.Set == "" || a.Number == "" {
+			return "chart error: for a card I need game, set, and number — look them up with tcg first."
+		}
 		chartable := map[string]bool{"pokemon": true, "pokemon-ja": true, "mtg": true, "lorcana": true, "one-piece": true, "one-piece-ja": true, "riftbound": true}
 		if !chartable[strings.ToLower(strings.TrimSpace(a.Game))] {
 			return "chart error: price charts aren't available for " + a.Game + " cards yet (its history isn't keyed by collector number). Give the current price from tcg instead — don't retry the chart."
-		}
-		if a.Game == "" || a.Set == "" || a.Number == "" {
-			return "chart error: for a card I need game, set, and number — look them up with tcg first."
 		}
 		if days == 0 {
 			days = 90

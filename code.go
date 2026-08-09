@@ -12,25 +12,17 @@ import (
 
 // Code capability: a shell + file tools so Vela can write code, install
 // libraries, and push to her own GitHub. HIGH TRUST — a shell can read
-// everything the process can (env, other users' encrypted wallet material),
-// so it's gated to an explicit coder allowlist (NANOCLAW_CODERS). Empty
-// allowlist = the whole capability is off.
+// everything the process can (env, secrets), so it's gated to an explicit
+// coder allowlist (NANOCLAW_CODERS). Empty allowlist = the capability is off.
 
 func (tc *ToolCtx) isCoder() bool { return tc.cfg.Coders[tc.authorID] }
 
 const coderOnly = "REFUSED: running code/shell is limited to the coder allowlist (NANOCLAW_CODERS). " +
 	"Tell this user they're not authorized to run commands on the box."
 
-const codeInterlock = "REFUSED: code/shell is disabled because this process also holds wallet keys " +
-	"(NANOCLAW_SECRET). Custody and code execution must run in SEPARATE processes — a shell here could " +
-	"read the secret and every user's keys. Move key custody to clawvault first. Tell the user this plainly."
-
-// codeGate is the single authorization point for all code tools: the
-// custody/execution interlock first, then the coder allowlist.
+// codeGate is the single authorization point for all code tools: the coder
+// allowlist.
 func (tc *ToolCtx) codeGate() string {
-	if tc.cfg.CodeInterlockTripped() {
-		return codeInterlock
-	}
 	if !tc.isCoder() {
 		return coderOnly
 	}

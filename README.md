@@ -89,53 +89,6 @@ see it (`NANOCLAW_DIVE_PASSES`, default 2). The economics are the point: a
 cheap model looped twice with a clear goal beats one expensive shot, at a
 fraction of the cost.
 
-### Tokens & wallet (Bankr)
-
-Optional. Set `NANOCLAW_SECRET` and Vela can design tokens (no key needed) and
-run **per-user wallets** on Base through [Bankr](https://bankr.bot) — Bankr owns
-the wallet, signs, and executes; nanoclaw never touches private keys.
-
-**Each person connects their own wallet.** `/connect api_key:bk_…` (from
-[bankr.bot/api](https://bankr.bot/api), wallet access enabled) — the command
-and its reply are **ephemeral**, so only that user ever sees them. Vela then
-acts *only* on that person's wallet, recognized by their Discord id; nobody can
-touch anyone else's funds. `/disconnect` wipes your key.
-
-> **/connect** api_key: bk_…                          ← private, one time
-> **@nanoclaw** what's my portfolio worth?            ← your wallet
-> **@nanoclaw** review my token idea for indie shops  ← strategy, no wallet
-> **@nanoclaw** launch $SHELF and buy $50 of it       ← your wallet, confirmed
-
-**Custody & guardrails:**
-- Connected keys are **AES-GCM encrypted at rest** under `NANOCLAW_SECRET`
-  (Discord id as AAD, so a swapped key file can't impersonate another owner).
-  Generate the secret on the box with `deploy/gen-secret.sh` — it writes a
-  random 256-bit value to a root-600 file that's never printed or committed.
-  Keep that file *off the microSD* and a stolen card can't decrypt anything.
-  No secret → the whole wallet feature is off and no keys are ever stored.
-- Vela acts only on the requester's own connected wallet — no shared wallet,
-  no borrowing someone else's.
-- **Confirmation is out-of-band, not model-controlled.** A fund-moving or
-  deploy request never executes from chat — it queues and the requester gets
-  a **Confirm button**. Only their click (verified against their Discord id,
-  in Go) runs the transaction. So a prompt-injected web page fetched via a
-  tool can't trigger a spend: it can put text in the model's context, but it
-  can't click a button as the user.
-- Read vs. write is **fail-closed**: only clear look-ups (balance, portfolio,
-  price…) run without a click; anything ambiguous ("move", "pay", "yeet")
-  routes to the button.
-- **SSRF-guarded fetches**: the web tools refuse private/loopback/link-local
-  addresses and re-check after every redirect, so a public URL can't bounce
-  the bot into your LAN.
-- Honest limit: a bot that spends autonomously must be able to decrypt keys at
-  runtime, so anyone with live *root on the running box* is outside what
-  encryption can stop. This protects against a lost/stolen card and casual
-  file access, not a determined operator dumping process memory.
-
-Token strategy follows the five-forces method from Bankr's
-[token-strategist](https://github.com/BankrBot/token-strategist); the wallet
-API is [bankr-api-examples](https://github.com/BankrBot/bankr-api-examples).
-
 ### Code, git & libraries (coder allowlist)
 
 Optional. Add Discord IDs to `NANOCLAW_CODERS` and those users can have Vela
@@ -145,21 +98,12 @@ write code, run it, install libraries, and push to her own GitHub — a shell +
 
 > **@vela** clone my repo, add a /health endpoint, run the tests, commit and push
 
-**This is root-level trust.** A shell can read the process environment and
-every user's encrypted wallet material, so `NANOCLAW_CODERS` members are
-effectively box admins — add only people you'd give the whole machine to.
-Blank allowlist = the capability is entirely off; non-coders are refused in
-code. `write_file`/`read_file` are confined to the workspace (no `..` escape);
+**This is root-level trust.** A shell can read the process environment and any
+secret the bot holds, so `NANOCLAW_CODERS` members are effectively box admins —
+add only people you'd give the whole machine to. Blank allowlist = the
+capability is entirely off; non-coders are refused in code.
+`write_file`/`read_file` are confined to the workspace (no `..` escape);
 `shell` is deliberately unconfined for those who pass the allowlist.
-
-**Custody/execution interlock.** Code and in-process wallet keys are mutually
-exclusive: while this process holds `NANOCLAW_SECRET`, the shell/file tools are
-**disabled** (not offered, and refused if called) — otherwise a shell could
-read the secret and every user's keys. To run both, key custody moves to a
-separate process (**[clawvault](CLAWVAULT.md)**) so nanoclaw no longer holds
-the secret. That split — plus signed-tag deploys and box hardening — is the
-architecture in [CLAWVAULT.md](CLAWVAULT.md); the interlock ships today so
-there's no unsafe window.
 
 **Injection guard.** Web fetches (`web_search`/`fetch_url`) and code execution
 (`shell`/`write_file`/`read_file`) are mutually exclusive *within a single

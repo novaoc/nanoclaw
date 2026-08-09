@@ -3,7 +3,3 @@ nanoclaw-riscv64
 nanoclaw.env
 data/
 *.log
-.nanoclaw.secret
-*.secret
-clawvault-riscv64
-vault-data/

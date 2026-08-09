@@ -5,8 +5,7 @@ build:
 
 riscv64:
 	GOOS=linux GOARCH=riscv64 go build -ldflags="-s -w" -o nanoclaw-riscv64 .
-	GOOS=linux GOARCH=riscv64 go build -ldflags="-s -w" -o clawvault-riscv64 ./clawvault
-	@ls -lh nanoclaw-riscv64 clawvault-riscv64
+	@ls -lh nanoclaw-riscv64
 
 test:
 	go vet ./...

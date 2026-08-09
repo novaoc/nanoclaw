@@ -15,24 +15,11 @@ func atoiOr(s string, def int) int {
 	return def
 }
 
-// WalletEnabled reports whether any wallet backend is configured — local
-// in-process custody (Secret) or the clawvault socket.
-func (c *Config) WalletEnabled() bool { return c.Secret != "" || c.VaultSocket != "" }
-
-// CodeEnabled reports whether the shell/file tools may run. It enforces the
-// custody/execution split: code is NOT available while THIS process holds
-// wallet-key material (NANOCLAW_SECRET), because a shell in the same process
-// could read the secret and every connected user's keys and exfiltrate them.
-// To have both a coder shell AND wallets, move key custody into clawvault (a
-// separate process/user) so this one never holds the secret. See CLAWVAULT.md.
+// CodeEnabled reports whether the shell/file tools may run — gated to an
+// explicit coder allowlist (NANOCLAW_CODERS). A shell is root-level trust on
+// the box, so an empty allowlist turns the whole capability off.
 func (c *Config) CodeEnabled() bool {
-	return len(c.Coders) > 0 && c.Secret == ""
-}
-
-// CodeInterlockTripped is true when a misconfig asks for BOTH code and
-// in-process keys — code is refused and startup logs why.
-func (c *Config) CodeInterlockTripped() bool {
-	return len(c.Coders) > 0 && c.Secret != ""
+	return len(c.Coders) > 0
 }
 
 type Config struct {
@@ -47,10 +34,6 @@ type Config struct {
 	DiveToolIters int // /dive gets a bigger tool budget…
 	DivePasses    int // …and N self-review passes (the looper-model play)
 	BraveKey      string // BRAVE_API_KEY — real search API; falls back to DuckDuckGo scraping
-
-	BankrURL    string // BANKR_API_URL, default https://api.bankr.bot
-	Secret      string // NANOCLAW_SECRET — LOCAL custody only (mutually exclusive with code)
-	VaultSocket string // CLAWVAULT_SOCKET — when set, wallets go through clawvault (no local secret)
 
 	Coders      map[string]bool // Discord IDs allowed to run shell/code (root-trust)
 	Workspace   string          // where code lives + shell runs
@@ -102,9 +85,6 @@ func LoadConfig() (*Config, error) {
 		DiveToolIters: 16,
 		DivePasses:    atoiOr(get("NANOCLAW_DIVE_PASSES", ""), 2),
 		BraveKey:      get("BRAVE_API_KEY", ""),
-		BankrURL:      get("BANKR_API_URL", "https://api.bankr.bot"),
-		Secret:        get("NANOCLAW_SECRET", ""),
-		VaultSocket:   get("CLAWVAULT_SOCKET", ""),
 		Coders:        map[string]bool{},
 		Workspace:     get("NANOCLAW_WORKSPACE", ""),
 		GitHubToken:   get("GITHUB_TOKEN", ""),
@@ -113,11 +93,6 @@ func LoadConfig() (*Config, error) {
 	}
 	if cfg.Workspace == "" {
 		cfg.Workspace = cfg.DataDir + "/workspace"
-	}
-	// Vault mode: clawvault owns custody, so nanoclaw must NOT hold the secret.
-	// This is also what lets code + wallets coexist (interlock keys on Secret).
-	if cfg.VaultSocket != "" {
-		cfg.Secret = ""
 	}
 	for _, id := range strings.Split(get("FOCUS_CHANNELS", ""), ",") {
 		if id = strings.TrimSpace(id); id != "" {

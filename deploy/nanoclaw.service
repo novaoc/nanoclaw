@@ -8,24 +8,17 @@ Wants=network-online.target
 [Service]
 ExecStart=/root/nanoclaw
 WorkingDirectory=/root
+EnvironmentFile=/etc/nanoclaw.env
 Restart=always
 RestartSec=10
 # 256 MB board — keep the agent honest
 MemoryMax=180M
-# WALLETS: two modes, pick one.
-#  (a) Vault mode (recommended, and REQUIRED to also enable code): keys live
-#      in clawvault. Point nanoclaw at its socket and DO NOT give nanoclaw the
-#      secret. This is what lets NANOCLAW_CODERS + wallets coexist safely.
-Environment=CLAWVAULT_SOCKET=/var/lib/clawvault/clawvault.sock
-#  (b) Local mode (no clawvault): nanoclaw holds the secret itself — but then
-#      the code capability is disabled by the interlock. Uncomment to use:
-# EnvironmentFile=-/etc/nanoclaw.secret
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/root /var/lib/clawvault
+ReadWritePaths=/root
 
 [Install]
 WantedBy=multi-user.target

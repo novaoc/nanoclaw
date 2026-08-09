@@ -25,16 +25,10 @@ func main() {
 		log.Fatalf("data dir: %v", err)
 	}
 	SetupGit(cfg) // authenticate git pushes as Vela when GITHUB_TOKEN is set
-	if cfg.CodeInterlockTripped() {
-		log.Printf("SECURITY: NANOCLAW_CODERS is set while this process holds NANOCLAW_SECRET — " +
-			"code/shell is DISABLED (a shell could read the wallet secret + keys). Move custody to " +
-			"clawvault to run both safely. See CLAWVAULT.md.")
-	}
 	if cfg.CodeEnabled() && cfg.GitHubToken != "" {
 		log.Printf("SECURITY: code is enabled with a GITHUB_TOKEN in the environment — a coder shell can " +
-			"read it and push anything. Only the signed-tag deploy gate makes such a push inert. Do NOT " +
-			"enable NANOCLAW_CODERS in production until signed-tag verification is live on the box, and use " +
-			"a fine-grained PAT scoped to Vela's own repos (contents+PR write, no admin). See CLAWVAULT.md.")
+			"read it and push anything. Scope the token to blast radius: a fine-grained PAT limited to " +
+			"Vela's own repos (contents+PR write, no admin), treated as rotatable.")
 	}
 
 	agent := NewAgent(cfg)

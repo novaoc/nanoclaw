@@ -22,16 +22,10 @@ import (
 
 type ToolCtx struct {
 	cfg       *Config
-	bankr     *Bankr
-	keys      *KeyStore
-	confirms  *Confirmations
-	vault     *VaultClient
-	authorID  string         // Discord user id of the requester — picks their wallet
-	channelID string         // where to post a vault confirm button
-	Artifacts []string       // file paths saved this turn
-	Pending   *PendingAction // local-mode action awaiting the user's button click
-	usedWeb   bool           // this turn touched the web (fetch/search)
-	usedCode  bool           // this turn ran code (shell/file) — mutually exclusive with web
+	authorID  string   // Discord user id of the requester — gates the coder allowlist
+	Artifacts []string // file paths saved this turn
+	usedWeb   bool     // this turn touched the web (fetch/search)
+	usedCode  bool     // this turn ran code (shell/file) — mutually exclusive with web
 }
 
 // clip truncates on a UTF-8 rune boundary so we never split a character.
@@ -68,13 +62,13 @@ func toolDefs(cfg *Config) []ToolDef {
 			"Append a durable note to long-term memory (survives reboots, shared across all channels). Use for server preferences, ongoing projects, decisions.",
 			`{"type":"object","properties":{"note":{"type":"string"}},"required":["note"]}`),
 		mk("tcg",
-			"Look up any TCG card, set, or market price from the open rarebox-data dataset — Pokémon (EN/JP), Magic, Yu-Gi-Oh!, Lorcana, One Piece (EN/JP), Riftbound. Omit `set` to find sets by name; give a set id to list its cards (filtered by `query`) with number, rarity, USD price, and image URL. For sealed products or live market chatter, use web_search.",
-			`{"type":"object","properties":{"game":{"type":"string","description":"pokemon|pokemon-ja|mtg|yugioh|lorcana|one-piece|one-piece-ja|riftbound"},"set":{"type":"string","description":"set id (e.g. me2); omit to search sets"},"query":{"type":"string","description":"card or set name filter"}},"required":["game"]}`),
+			"Look up any TCG card, set, or market price from the open rarebox-data dataset — Pokémon (EN/JP), Magic, Yu-Gi-Oh!, Lorcana, One Piece (EN/JP), Riftbound. To price/find a CARD, just pass its name as `query` (no `set`): it searches cards by name across the newest sets and returns each match's set id, number, rarity, USD price, and image URL — you do NOT need to know the set. Pass a set id as `set` to list that set's cards. This is the source of truth for a single card's price, JP included — use it, not web_search. Reserve web_search for SEALED products or live market chatter.",
+			`{"type":"object","properties":{"game":{"type":"string","description":"pokemon|pokemon-ja|mtg|yugioh|lorcana|one-piece|one-piece-ja|riftbound"},"set":{"type":"string","description":"set id (e.g. me2); omit and pass query to search cards by name across sets"},"query":{"type":"string","description":"card name (searches across sets) or set name"}},"required":["game"]}`),
 		mk("attach_image",
 			"Fetch an image by URL and attach it to your Discord reply (e.g. a card image from a tcg lookup, or any picture the user asks to see). Images only, up to 8MB.",
 			`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),
 	}
-	if cfg.CodeEnabled() { // off while this process holds wallet keys (interlock)
+	if cfg.CodeEnabled() { // gated to the coder allowlist (NANOCLAW_CODERS)
 		defs = append(defs,
 			mk("shell",
 				"Run a shell command in your code workspace (persists across turns). Use for git (clone/commit/push to your GitHub), installing libraries, running builds/tests, scaffolding. 180s timeout. You run on a 256MB single-core RISC-V board — keep it light; for heavy builds, push and let CI compile. NOTE: code and web fetches can't run in the same turn (injection guard) — if you need to research first, do it in a separate message, then run code.",
@@ -86,19 +80,12 @@ func toolDefs(cfg *Config) []ToolDef {
 				"Read a file from your workspace.",
 				`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`))
 	}
-	if cfg.WalletEnabled() {
-		defs = append(defs, mk("bankr",
-			"Bankr wallet + token agent (Base), acting on THE REQUESTER'S OWN connected wallet (via /connect) — never anyone else's. "+
-				"Reads (balances, portfolio, prices, fees, address) run immediately. Anything that could move funds or deploy (launch, send, swap, buy, sell, trade, pay, move, convert, bridge, claim, stake…) does NOT execute here: it returns QUEUED and the user gets a Confirm button they must click. "+
-				"So just describe the action plainly in your prompt; you do not approve it — the human's button click does.",
-			`{"type":"object","properties":{"prompt":{"type":"string","description":"natural-language instruction for the requester's Bankr wallet"}},"required":["prompt"]}`))
-	}
 	return defs
 }
 
 func (tc *ToolCtx) Run(name, args string) string {
 	var a struct {
-		Query, URL, Name, Content, Note, Prompt, Command, Path, Game, Set string
+		Query, URL, Name, Content, Note, Command, Path, Game, Set string
 	}
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "tool error: bad arguments: " + err.Error()
@@ -135,8 +122,6 @@ func (tc *ToolCtx) Run(name, args string) string {
 		return tc.saveArtifact(a.Name, a.Content)
 	case "remember":
 		return appendMemory(tc.cfg, a.Note)
-	case "bankr":
-		return tc.runBankr(a.Prompt)
 	case "shell":
 		tc.usedCode = true
 		return tc.runShell(a.Command)
@@ -148,54 +133,6 @@ func (tc *ToolCtx) Run(name, args string) string {
 		return tc.readWorkspaceFile(a.Path)
 	}
 	return "tool error: unknown tool " + name
-}
-
-// runBankr acts ONLY on the requester's own connected wallet. Reads execute
-// immediately; anything that isn't clearly a read is treated as fund-moving
-// and routed to an out-of-band Discord confirmation — the model never
-// approves a transaction, a button click by the requester does.
-func (tc *ToolCtx) runBankr(prompt string) string {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return "bankr error: empty prompt"
-	}
-	// Vault mode: custody + policy + confirmation all live in clawvault. We can
-	// only relay the prompt; a write returns queued and clawvault shows its own
-	// button. We never see a key here.
-	if tc.vault != nil {
-		if !tc.vault.Connected(tc.authorID) {
-			return "NOT CONNECTED: tell them to run /connect on the wallet bot (clawvault) and paste their own Bankr key — " +
-				"it's entered there, never here, so I never touch it. Then I can read balances or relay a trade for them."
-		}
-		result, queued, err := tc.vault.Prompt(tc.authorID, tc.channelID, prompt)
-		if err != nil {
-			return "wallet error: " + err.Error()
-		}
-		if queued {
-			return "QUEUED: the wallet bot has shown them a Confirm button for this exact action. Tell them to click Confirm there — " +
-				"I can't approve it and neither can you; only their click runs it."
-		}
-		return result
-	}
-	if tc.bankr == nil || tc.keys == nil || !tc.keys.Usable() {
-		return "bankr is not configured on this instance"
-	}
-	if !tc.keys.Has(tc.authorID) {
-		return "NOT CONNECTED: this user has no wallet connected. Tell them to run /connect and paste their own Bankr API key " +
-			"(from bankr.bot/api, wallet access enabled) — it's private and encrypted, and you'll only ever act on their own wallet."
-	}
-	if !isWalletRead(prompt) {
-		// fail-closed: not clearly a read → treat as fund-moving, require a click
-		tc.Pending = tc.confirms.Add(tc.authorID, prompt)
-		return "QUEUED FOR CONFIRMATION: a Confirm button has been shown to the user for this exact action. " +
-			"Do NOT say it's done — tell them to click Confirm (or Cancel). It runs only on their click."
-	}
-	key, _ := tc.keys.Get(tc.authorID)
-	out, err := tc.bankr.Prompt(key, prompt)
-	if err != nil {
-		return "bankr error: " + err.Error()
-	}
-	return out
 }
 
 // blockedIP rejects anything that could reach the local box or its LAN —

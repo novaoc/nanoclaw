@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -37,8 +38,12 @@ func readMemory(cfg *Config) string {
 	return s
 }
 
+// memFence matches the memory delimiter in any case, so a note can't contain a
+// literal </memory> that forges the block boundary the system prompt relies on.
+var memFence = regexp.MustCompile(`(?i)</?memory>`)
+
 func appendMemory(cfg *Config, note string) string {
-	note = strings.TrimSpace(note)
+	note = memFence.ReplaceAllString(strings.TrimSpace(note), "[mem]")
 	if note == "" {
 		return "memory error: empty note"
 	}

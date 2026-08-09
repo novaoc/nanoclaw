@@ -84,6 +84,25 @@ func priceStr(prices map[string]float64, set, number string) string {
 	return ""
 }
 
+// jaHint nudges the model to search in English when a lookup misses — the
+// dataset indexes every game (Japanese sets included) under ENGLISH card names,
+// so a Japanese query never matches and retrying it just burns tool budget.
+func jaHint(game, query string) string {
+	if hasNonASCII(query) || strings.HasSuffix(game, "-ja") {
+		return " NOTE: card names here are ENGLISH for every game, Japanese sets too. If you searched a Japanese name, translate it to English and retry ONCE (e.g. メガリザードンX ex → \"Mega Charizard X\"); do not repeat the same query."
+	}
+	return ""
+}
+
+func hasNonASCII(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return true
+		}
+	}
+	return false
+}
+
 func cardLine(b *strings.Builder, c rbCard, price string) {
 	rar := ""
 	if c.Rarity != "" {
@@ -164,7 +183,7 @@ func tcgLookup(game, set, query string) string {
 		}
 	}
 	if n == 0 {
-		return "no cards matched in " + set + " — try a different name, or omit the query to list the set."
+		return "no cards matched in " + set + " — try a different name, or omit the query to list the set." + jaHint(game, query)
 	}
 	b.WriteString("(image URLs shown — offer to attach one if the user wants to see it. When several same-named cards exist and rarity is blank, the higher-priced ones are the chase/secret-rare versions.)")
 	return clip(b.String(), 6000)
@@ -177,7 +196,7 @@ func tcgCardSearch(game, q string, sets []rbSet) string {
 	sort.SliceStable(sets, func(i, j int) bool { return sets[i].ReleaseDate > sets[j].ReleaseDate })
 	prices := rbPrices(game)
 
-	const maxSets = 18
+	const maxSets = 24
 	var b strings.Builder
 	n, scanned := 0, 0
 	for _, s := range sets {
@@ -200,7 +219,7 @@ func tcgCardSearch(game, q string, sets []rbSet) string {
 		}
 	}
 	if n == 0 {
-		return fmt.Sprintf("no cards named %q in the %d most recent %s sets. For an older card, pass its set id as `set`; to browse sets, omit `query`.", q, scanned, game)
+		return fmt.Sprintf("no cards named %q in the %d most recent %s sets. For an older card, pass its set id as `set`; to browse sets, omit `query`.", q, scanned, game) + jaHint(game, q)
 	}
 	head := fmt.Sprintf("%s cards matching %q (searched the %d newest sets):\n", game, q, scanned)
 	tail := "\n(image URLs shown — offer to attach one if they want to see it. When same-named cards repeat with blank rarity, the higher-priced ones are the chase/secret-rare versions.)"

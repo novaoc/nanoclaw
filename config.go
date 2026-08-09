@@ -15,6 +15,14 @@ func atoiOr(s string, def int) int {
 	return def
 }
 
+// clampInt parses s and keeps it within [lo,hi], else returns def.
+func clampInt(s string, def, lo, hi int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n >= lo && n <= hi {
+		return n
+	}
+	return def
+}
+
 // VisionEnabled reports whether Vela can read images sent to Discord.
 func (c *Config) VisionEnabled() bool { return c.VisionModel != "" }
 
@@ -96,7 +104,7 @@ func LoadConfig() (*Config, error) {
 		VisionModel:   get("NANOCLAW_VISION_MODEL", "stepfun/step-3.7-flash"),
 		DataDir:       get("NANOCLAW_DATA", "data"),
 		FocusChannels: map[string]bool{},
-		MaxToolIters:  8,
+		MaxToolIters:  clampInt(get("NANOCLAW_MAX_ITERS", ""), 12, 4, 40),
 		HistoryTurns:  24,
 		DiveToolIters: 16,
 		DivePasses:    atoiOr(get("NANOCLAW_DIVE_PASSES", ""), 2),

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -92,6 +93,35 @@ func jaHint(game, query string) string {
 		return " NOTE: card names here are ENGLISH for every game, Japanese sets too. If you searched a Japanese name, translate it to English and retry ONCE (e.g. メガリザードンX ex → \"Mega Charizard X\"); do not repeat the same query."
 	}
 	return ""
+}
+
+// pokeResolve is the EN-Pokémon fallback when the recent-set scan misses an
+// older card: pokemontcg.io indexes every set and returns rarebox-compatible
+// set ids, so we hand back the correct set/number (+ the rarebox price when we
+// have it) instead of the model guessing a wrong set code.
+func pokeResolve(game, q string, prices map[string]float64) string {
+	var d struct {
+		Data []struct {
+			Name, Number, Rarity string
+			Set                  struct{ ID, Name string }
+			Images               struct{ Small string }
+		}
+	}
+	u := "https://api.pokemontcg.io/v2/cards?pageSize=20&q=" + url.QueryEscape(`name:"`+q+`"`)
+	if err := fetchJSON(u, &d); err != nil || len(d.Data) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s cards matching %q (searched all sets):\n", game, q)
+	for i, c := range d.Data {
+		if i >= 20 {
+			break
+		}
+		cardLine(&b, rbCard{Name: c.Name, Number: c.Number, Rarity: c.Rarity, Image: c.Images.Small},
+			priceStr(prices, c.Set.ID, c.Number)+" (set "+c.Set.ID+" — "+c.Set.Name+")")
+	}
+	b.WriteString("(the set ids shown are the ones to pass to tcg or price_chart.)")
+	return clip(b.String(), 6000)
 }
 
 func hasNonASCII(s string) bool {
@@ -219,6 +249,15 @@ func tcgCardSearch(game, q string, sets []rbSet) string {
 		}
 	}
 	if n == 0 {
+		// Recent-set scan missed — likely an older card. For EN Pokémon, resolve
+		// it across ALL sets via pokemontcg.io (which uses the same set ids as
+		// rarebox), so the model gets the right set/number instead of guessing a
+		// wrong code and bailing to the web.
+		if game == "pokemon" {
+			if alt := pokeResolve(game, q, prices); alt != "" {
+				return alt
+			}
+		}
 		return fmt.Sprintf("no cards named %q in the %d most recent %s sets. For an older card, pass its set id as `set`; to browse sets, omit `query`.", q, scanned, game) + jaHint(game, q)
 	}
 	head := fmt.Sprintf("%s cards matching %q (searched the %d newest sets):\n", game, q, scanned)

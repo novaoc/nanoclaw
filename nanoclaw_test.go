@@ -57,7 +57,7 @@ func TestAgentLoopWithTools(t *testing.T) {
 	cfg := testCfg(t)
 	cfg.DeepseekURL = srv.URL
 	a := NewAgent(cfg)
-	r := a.Handle("chan1", "wren", "make me a mockup")
+	r := a.Handle("chan1", "u1", "wren", "make me a mockup")
 
 	if r.Text != "done — mockup attached" {
 		t.Fatalf("bad reply: %q", r.Text)
@@ -88,7 +88,7 @@ func TestAgentToolBudget(t *testing.T) {
 	cfg := testCfg(t)
 	cfg.DeepseekURL = srv.URL
 	cfg.MaxToolIters = 3
-	r := NewAgent(cfg).Handle("c", "u", "hi")
+	r := NewAgent(cfg).Handle("c", "u1", "u", "hi")
 	if !strings.Contains(r.Text, "tool budget") {
 		t.Fatalf("expected budget cutoff, got %q", r.Text)
 	}
@@ -119,7 +119,7 @@ func TestDiveSelfReviewPass(t *testing.T) {
 	cfg := testCfg(t)
 	cfg.DeepseekURL = srv.URL
 	cfg.DiveToolIters, cfg.DivePasses = 16, 2
-	r := NewAgent(cfg).Dive("c", "wren", "benchmark rundown")
+	r := NewAgent(cfg).Dive("c", "u1", "wren", "benchmark rundown")
 	if r.Text != "repaired answer" {
 		t.Fatalf("expected repaired answer, got %q", r.Text)
 	}
@@ -162,6 +162,59 @@ func TestDDGParsing(t *testing.T) {
 	links := ddgResult.FindAllStringSubmatch(page, 8)
 	if len(links) != 1 || !strings.Contains(links[0][2], "DeepSeek") {
 		t.Fatalf("result parse broken: %v", links)
+	}
+}
+
+// The money guardrails run BEFORE any request leaves the box — verify the
+// tool layer itself gates, independent of what the prompt says.
+func TestBankrWriteIntent(t *testing.T) {
+	writes := []string{"send 0.1 ETH to vitalik.eth", "launch a token called VELA",
+		"create a wallet", "swap 100 USDC for ETH", "buy $50 of DEGEN", "claim my fees"}
+	reads := []string{"what are my balances?", "show my portfolio", "price of ETH",
+		"how much fees have I earned?", "list my deployed tokens"}
+	for _, w := range writes {
+		if !isBankrWrite(w) {
+			t.Errorf("should be a WRITE: %q", w)
+		}
+	}
+	for _, r := range reads {
+		if isBankrWrite(r) {
+			t.Errorf("should be a READ: %q", r)
+		}
+	}
+}
+
+func TestBankrGating(t *testing.T) {
+	cfg := testCfg(t)
+	cfg.BankrKey = "bk_test" // enable, but no real client calls in these paths
+	cfg.BankrAdmins = map[string]bool{"admin-id": true}
+
+	// the tool is only offered when a key is present
+	names := map[string]bool{}
+	for _, d := range toolDefs(cfg) {
+		names[d.Function.Name] = true
+	}
+	if !names["bankr"] {
+		t.Fatal("bankr tool should be offered when a key is set")
+	}
+	if toolDefs(&Config{})[0].Function.Name == "bankr" {
+		t.Fatal("bankr tool must NOT appear without a key")
+	}
+
+	newTC := func(uid string) *ToolCtx { return &ToolCtx{cfg: cfg, bankr: NewBankr(cfg), authorID: uid} }
+
+	// non-admin write → refused, never reaches the network
+	if out := newTC("rando").runBankr("send 1 ETH to 0xabc", false); !strings.Contains(out, "REFUSED") {
+		t.Fatalf("non-admin write should be refused, got: %s", out)
+	}
+	// admin write without confirm → held for confirmation
+	if out := newTC("admin-id").runBankr("launch a token called VELA", false); !strings.Contains(out, "HOLD") {
+		t.Fatalf("admin write w/o confirm should hold, got: %s", out)
+	}
+	// non-admin READ is allowed to proceed (fails only at the network, which
+	// proves it passed the gate) — must NOT be a policy refusal
+	if out := newTC("rando").runBankr("what are my balances?", false); strings.Contains(out, "REFUSED") || strings.Contains(out, "HOLD") {
+		t.Fatalf("read should pass the gate, got: %s", out)
 	}
 }
 

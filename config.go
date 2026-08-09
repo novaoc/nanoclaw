@@ -26,6 +26,10 @@ type Config struct {
 	HistoryTurns  int
 	DiveToolIters int // /dive gets a bigger tool budget…
 	DivePasses    int // …and N self-review passes (the looper-model play)
+
+	BankrKey    string          // BANKR_API_KEY — enables the token/wallet skill
+	BankrURL    string          // BANKR_API_URL, default https://api.bankr.bot
+	BankrAdmins map[string]bool // Discord user IDs allowed to run fund-moving ops
 }
 
 // LoadConfig reads /etc/nanoclaw.env then ./nanoclaw.env (later wins),
@@ -70,10 +74,18 @@ func LoadConfig() (*Config, error) {
 		HistoryTurns:  24,
 		DiveToolIters: 16,
 		DivePasses:    atoiOr(get("NANOCLAW_DIVE_PASSES", ""), 2),
+		BankrKey:      get("BANKR_API_KEY", ""),
+		BankrURL:      get("BANKR_API_URL", "https://api.bankr.bot"),
+		BankrAdmins:   map[string]bool{},
 	}
 	for _, id := range strings.Split(get("FOCUS_CHANNELS", ""), ",") {
 		if id = strings.TrimSpace(id); id != "" {
 			cfg.FocusChannels[id] = true
+		}
+	}
+	for _, id := range strings.Split(get("BANKR_ADMINS", ""), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			cfg.BankrAdmins[id] = true
 		}
 	}
 	if cfg.DiscordToken == "" {

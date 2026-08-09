@@ -19,10 +19,12 @@ import (
 
 type ToolCtx struct {
 	cfg       *Config
+	bankr     *Bankr
+	authorID  string   // Discord user id of the requester (for admin gating)
 	Artifacts []string // file paths saved this turn
 }
 
-func toolDefs() []ToolDef {
+func toolDefs(cfg *Config) []ToolDef {
 	mk := func(name, desc, params string) ToolDef {
 		var t ToolDef
 		t.Type = "function"
@@ -31,7 +33,7 @@ func toolDefs() []ToolDef {
 		t.Function.Parameters = json.RawMessage(params)
 		return t
 	}
-	return []ToolDef{
+	defs := []ToolDef{
 		mk("web_search",
 			"Search the web (DuckDuckGo). Use for benchmarks, model releases, docs, news. Returns titles, URLs, snippets.",
 			`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`),
@@ -45,11 +47,21 @@ func toolDefs() []ToolDef {
 			"Append a durable note to long-term memory (survives reboots, shared across all channels). Use for server preferences, ongoing projects, decisions.",
 			`{"type":"object","properties":{"note":{"type":"string"}},"required":["note"]}`),
 	}
+	if cfg.BankrKey != "" {
+		defs = append(defs, mk("bankr",
+			"Bankr wallet + token agent (Base). Natural-language: create a wallet, check balances/portfolio/prices, launch a token, or trade (send/swap/buy/sell). "+
+				"READS (balances, prices, portfolio, fees, token info) run for anyone. "+
+				"WRITES that move funds or deploy (create wallet, launch, send, swap, buy, sell, claim) require confirm:true AND an authorized user — "+
+				"ALWAYS show the exact action and wait for the human's explicit 'yes' before setting confirm:true; deploys and trades are irreversible.",
+			`{"type":"object","properties":{"prompt":{"type":"string","description":"natural-language instruction for the Bankr agent"},"confirm":{"type":"boolean","description":"set true ONLY after the human explicitly approved this specific fund-moving action"}},"required":["prompt"]}`))
+	}
+	return defs
 }
 
 func (tc *ToolCtx) Run(name, args string) string {
 	var a struct {
-		Query, URL, Name, Content, Note string
+		Query, URL, Name, Content, Note, Prompt string
+		Confirm                                 bool
 	}
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "tool error: bad arguments: " + err.Error()
@@ -63,8 +75,39 @@ func (tc *ToolCtx) Run(name, args string) string {
 		return tc.saveArtifact(a.Name, a.Content)
 	case "remember":
 		return appendMemory(tc.cfg, a.Note)
+	case "bankr":
+		return tc.runBankr(a.Prompt, a.Confirm)
 	}
 	return "tool error: unknown tool " + name
+}
+
+// runBankr enforces the money guardrails BEFORE any request leaves the box:
+// fund-moving / deploy prompts need an authorized Discord user and an
+// explicit confirm flag. Reads are open. The prompt tells Vela to get a
+// human "yes" first; this is the hard backstop under that.
+func (tc *ToolCtx) runBankr(prompt string, confirm bool) string {
+	if tc.bankr == nil {
+		return "bankr is not configured on this instance"
+	}
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return "bankr error: empty prompt"
+	}
+	if isBankrWrite(prompt) {
+		if !tc.cfg.BankrAdmins[tc.authorID] {
+			return "REFUSED: this is a fund-moving/deploy action and this user is not on the Bankr admin allowlist. " +
+				"Tell them only an authorized admin can execute wallet creation, launches, or trades. Reads (balances, prices, portfolio) are fine for anyone."
+		}
+		if !confirm {
+			return "HOLD: confirmation required. Show the human the EXACT action (amounts, token, recipient, that it is irreversible) " +
+				"and only call bankr again with confirm:true after they reply with an explicit yes."
+		}
+	}
+	out, err := tc.bankr.Prompt(prompt)
+	if err != nil {
+		return "bankr error: " + err.Error()
+	}
+	return out
 }
 
 var httpClient = &http.Client{Timeout: 20 * time.Second}

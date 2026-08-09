@@ -83,6 +83,25 @@ see it (`NANOCLAW_DIVE_PASSES`, default 2). The economics are the point: a
 cheap model looped twice with a clear goal beats one expensive shot, at a
 fraction of the cost.
 
+### Tokens & wallet (Bankr)
+
+Optional. Set `BANKR_API_KEY` ([bankr.bot/api](https://bankr.bot/api), wallet
+access enabled) and Vela can design tokens and run a real wallet on Base
+through [Bankr](https://bankr.bot) — Bankr owns the wallet, signs, and executes
+on-chain; nanoclaw never touches keys.
+
+> **@nanoclaw** what's my Bankr portfolio worth?  ← read, anyone
+> **@nanoclaw** review my token idea: a coin for indie TCG shops  ← strategy
+> **@nanoclaw** create a wallet and launch $SHELF  ← write, admin only
+
+**Money guardrails:** reads (balances, prices, portfolio, fees) are open to
+anyone. Writes that move funds or deploy — create wallet, launch, send, swap,
+buy, sell, claim — require (1) a Discord user ID in `BANKR_ADMINS` and (2) an
+explicit confirmation after Vela shows the exact, irreversible action. Both
+gates are enforced in code, not just the prompt. Leave `BANKR_ADMINS` blank
+and it's reads-only. Token strategy follows the five-forces method from
+Bankr's [token-strategist](https://github.com/BankrBot/token-strategist).
+
 ### Mentions — quick turns
 
 > **@nanoclaw** mock up a landing page for a TCG price-alert app — dark, one CTA

@@ -57,11 +57,11 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		return
 	}
 	task := i.ApplicationCommandData().Options[0].StringValue()
-	author := "someone"
+	author, authorID := "someone", ""
 	if i.Member != nil && i.Member.User != nil {
-		author = i.Member.User.Username
+		author, authorID = i.Member.User.Username, i.Member.User.ID
 	} else if i.User != nil {
-		author = i.User.Username
+		author, authorID = i.User.Username, i.User.ID
 	}
 	// dives run long — defer now, follow up when the loop lands
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -70,7 +70,7 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	go func() {
 		b.locks <- struct{}{}
 		defer func() { <-b.locks }()
-		reply := b.agent.Dive(i.ChannelID, author, task)
+		reply := b.agent.Dive(i.ChannelID, authorID, author, task)
 		chunks := splitMessage("🌀 **dive**: "+task+"\n\n"+reply.Text, 1990)
 		for n, chunk := range chunks {
 			params := &discordgo.WebhookParams{Content: chunk}
@@ -131,7 +131,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 				}
 			}
 		}()
-		reply := b.agent.Handle(m.ChannelID, m.Author.Username, content)
+		reply := b.agent.Handle(m.ChannelID, m.Author.ID, m.Author.Username, content)
 		close(stop)
 		b.send(m.ChannelID, m.Reference(), reply)
 	}()

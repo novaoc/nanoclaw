@@ -73,7 +73,10 @@ func toolDefs(cfg *Config) []ToolDef {
 				"For a CARD: tcg-lookup it first, then pass game, set, number, and query=<card name> (uses rarebox price history, daily ~90d). "+
 				"For CRYPTO: query=<name/symbol e.g. bitcoin> (CoinGecko). For a STOCK: symbol=<ticker e.g. AAPL> (Yahoo). "+
 				"For an INDEX (a whole game's market, Card Ladder-style): kind=index + game — charts an equal-weight base-100 index of that game's tracked cards (newest sets), e.g. 'how's the pokemon market doing?'. "+
-				"Optional days (default 30, cards/index 90). This is neutral price data — not advice.",
+				"Optional days (default 30, cards/index 90). The output is a STATIC PNG — it has no hover or interactivity, so never describe it as interactive. "+
+				"Card history covers EVERY set that still trades, VINTAGE INCLUDED — never refuse an old card as unchartable; call this and let it answer. "+
+				"SANITY-CHECK every card chart: if the chart's latest price differs wildly from the price you quoted, you charted the WRONG PRINTING — redo with the correct number instead of shipping it with a caveat. "+
+				"This is neutral price data — not advice.",
 			`{"type":"object","properties":{"kind":{"type":"string","description":"card|stock|crypto|index"},"game":{"type":"string"},"set":{"type":"string"},"number":{"type":"string"},"symbol":{"type":"string","description":"stock ticker"},"query":{"type":"string","description":"crypto name/symbol, or card display name"},"days":{"type":"integer"}},"required":["kind"]}`),
 		mk("bench_chart",
 			"Render an LLM benchmark comparison as a grouped-bar chart IMAGE (a PNG that displays inline in Discord) attached to your reply. "+

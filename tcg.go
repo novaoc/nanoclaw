@@ -202,6 +202,9 @@ func cardLine(b *strings.Builder, c rbCard, price string) {
 // image URL (attachable via attach_image).
 func tcgLookup(game, set, query string) string {
 	game = strings.ToLower(strings.TrimSpace(game))
+	if game == "one-piece-ja" {
+		game = "one-piece" // no separate JP catalog exists — alias, don't 404
+	}
 	if !tcgGames[game] {
 		return "tcg error: unknown game. Options: pokemon, pokemon-ja, mtg, yugioh, lorcana, one-piece, one-piece-ja, riftbound"
 	}

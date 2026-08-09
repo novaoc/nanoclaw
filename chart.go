@@ -245,6 +245,9 @@ func (tc *ToolCtx) priceChart(a toolArgs) string {
 		sub = fmt.Sprintf("%s %s #%s · %s", a.Game, strings.ToUpper(a.Set), a.Number, variant)
 	case "index":
 		g := strings.ToLower(strings.TrimSpace(a.Game))
+		if g == "one-piece-ja" {
+			g = "one-piece" // no separate JP catalog — alias to the shared one
+		}
 		if !tcgGames[g] {
 			return "chart error: index needs a game — pokemon|pokemon-ja|mtg|yugioh|lorcana|one-piece|one-piece-ja|riftbound."
 		}

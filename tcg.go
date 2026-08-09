@@ -64,17 +64,43 @@ type rbSet struct {
 }
 type rbCard struct {
 	ID, Name, Number, Rarity, Image string
+	TcgplayerID                     string `json:"tcgplayerId"` // riftbound price/history key
 	Set                             struct{ ID, Name string }
 }
 
-// rbPrices loads a game's flat price map (set-number → USD). Best-effort:
-// prices are optional, so a miss returns an empty map, never an error.
+// rbPrices loads a game's price map (key → USD). Values are usually a flat
+// float, but some games (riftbound) use a {normal, foil} object — parse both.
+// Best-effort: prices are optional, so a miss returns an empty map.
 func rbPrices(game string) map[string]float64 {
 	var priced struct {
-		Prices map[string]float64 `json:"prices"`
+		Prices map[string]json.RawMessage `json:"prices"`
 	}
 	_ = rbGet(rbData+"/prices/"+game+"/latest.json", &priced)
-	return priced.Prices
+	out := make(map[string]float64, len(priced.Prices))
+	for k, v := range priced.Prices {
+		if p, ok := parsePriceVal(v); ok {
+			out[k] = p
+		}
+	}
+	return out
+}
+
+// parsePriceVal reads a flat number, or a {normal, foil} object (normal wins).
+func parsePriceVal(v json.RawMessage) (float64, bool) {
+	var f float64
+	if json.Unmarshal(v, &f) == nil {
+		return f, f > 0
+	}
+	var o struct{ Normal, Foil *float64 }
+	if json.Unmarshal(v, &o) == nil {
+		if o.Normal != nil && *o.Normal > 0 {
+			return *o.Normal, true
+		}
+		if o.Foil != nil && *o.Foil > 0 {
+			return *o.Foil, true
+		}
+	}
+	return 0, false
 }
 
 // priceStr formats a card's market price if the dataset has one.
@@ -89,8 +115,11 @@ func priceStr(prices map[string]float64, set, number string) string {
 // most games key by set+number, but One Piece keys by card id (OP01-024).
 func cardPrice(prices map[string]float64, game, set string, c rbCard) string {
 	key := strings.ToLower(set) + "-" + rbNormNum(c.Number)
-	if game == "one-piece" || game == "one-piece-ja" {
+	switch {
+	case game == "one-piece" || game == "one-piece-ja":
 		key = strings.ToUpper(c.ID)
+	case game == "riftbound" && c.TcgplayerID != "":
+		key = c.TcgplayerID
 	}
 	if p, ok := prices[key]; ok {
 		return fmt.Sprintf(" — $%.2f", p)

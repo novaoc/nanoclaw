@@ -25,7 +25,7 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 	}
 	s.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentMessageContent |
 		discordgo.IntentsDirectMessages
-	b := &Bot{cfg: cfg, agent: agent, session: s, locks: make(chan struct{}, 2)}
+	b := &Bot{cfg: cfg, agent: agent, session: s, locks: make(chan struct{}, cfg.Concurrency)}
 	s.AddHandler(b.onMessage)
 	s.AddHandler(b.onReady)
 	s.AddHandler(b.onInteraction)
@@ -140,8 +140,21 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	go func() {
-		b.locks <- struct{}{} // cap concurrent turns (256 MB of RAM, be humble)
+		// One turn at a time by default (RAM-safe on the Nano). If she's busy,
+		// queue this one — and drop an ⏳ on the message so they know they're in
+		// line rather than being ignored.
+		queued := false
+		select {
+		case b.locks <- struct{}{}:
+		default:
+			queued = true
+			_ = s.MessageReactionAdd(m.ChannelID, m.ID, "⏳")
+			b.locks <- struct{}{} // wait our turn in the queue
+		}
 		defer func() { <-b.locks }()
+		if queued {
+			_ = s.MessageReactionRemove(m.ChannelID, m.ID, "⏳", s.State.User.ID)
+		}
 		stop := make(chan struct{})
 		go func() { // keep the typing indicator alive through long tool runs
 			for {

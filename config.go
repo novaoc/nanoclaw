@@ -52,6 +52,7 @@ type Config struct {
 	DataDir       string
 	FocusChannels map[string]bool // channel IDs answered without a mention
 	MaxToolIters  int
+	Concurrency   int // max turns running at once; 1 = strict queue (RAM-safe on the Nano)
 	HistoryTurns  int
 	DiveToolIters int // /dive gets a bigger tool budget…
 	DivePasses    int // …and N self-review passes (the looper-model play)
@@ -105,6 +106,7 @@ func LoadConfig() (*Config, error) {
 		DataDir:       get("NANOCLAW_DATA", "data"),
 		FocusChannels: map[string]bool{},
 		MaxToolIters:  clampInt(get("NANOCLAW_MAX_ITERS", ""), 12, 4, 40),
+		Concurrency:   clampInt(get("NANOCLAW_CONCURRENCY", ""), 1, 1, 4),
 		HistoryTurns:  24,
 		DiveToolIters: 16,
 		DivePasses:    atoiOr(get("NANOCLAW_DIVE_PASSES", ""), 2),

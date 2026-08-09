@@ -15,6 +15,13 @@ import (
 )
 
 func main() {
+	// Headless eval subcommand: `nanoclaw eval <prompts.jsonl> <out.jsonl>`.
+	// Drives the real agent loop for load/quality testing; never starts Discord.
+	if len(os.Args) >= 4 && os.Args[1] == "eval" {
+		runEval(os.Args[2], os.Args[3])
+		return
+	}
+
 	cfg, err := LoadConfig()
 	if err != nil {
 		log.Fatalf("config: %v", err)

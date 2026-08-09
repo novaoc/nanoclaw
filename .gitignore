@@ -1,5 +1,6 @@
 nanoclaw
 nanoclaw-riscv64
+nanoclaw-eval-riscv64
 nanoclaw.env
 data/
 *.log

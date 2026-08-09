@@ -15,6 +15,10 @@ func atoiOr(s string, def int) int {
 	return def
 }
 
+// WalletEnabled reports whether any wallet backend is configured — local
+// in-process custody (Secret) or the clawvault socket.
+func (c *Config) WalletEnabled() bool { return c.Secret != "" || c.VaultSocket != "" }
+
 // CodeEnabled reports whether the shell/file tools may run. It enforces the
 // custody/execution split: code is NOT available while THIS process holds
 // wallet-key material (NANOCLAW_SECRET), because a shell in the same process
@@ -43,8 +47,9 @@ type Config struct {
 	DiveToolIters int // /dive gets a bigger tool budget…
 	DivePasses    int // …and N self-review passes (the looper-model play)
 
-	BankrURL string // BANKR_API_URL, default https://api.bankr.bot
-	Secret   string // NANOCLAW_SECRET — encrypts users' connected Bankr keys at rest
+	BankrURL    string // BANKR_API_URL, default https://api.bankr.bot
+	Secret      string // NANOCLAW_SECRET — LOCAL custody only (mutually exclusive with code)
+	VaultSocket string // CLAWVAULT_SOCKET — when set, wallets go through clawvault (no local secret)
 
 	Coders      map[string]bool // Discord IDs allowed to run shell/code (root-trust)
 	Workspace   string          // where code lives + shell runs
@@ -97,6 +102,7 @@ func LoadConfig() (*Config, error) {
 		DivePasses:    atoiOr(get("NANOCLAW_DIVE_PASSES", ""), 2),
 		BankrURL:      get("BANKR_API_URL", "https://api.bankr.bot"),
 		Secret:        get("NANOCLAW_SECRET", ""),
+		VaultSocket:   get("CLAWVAULT_SOCKET", ""),
 		Coders:        map[string]bool{},
 		Workspace:     get("NANOCLAW_WORKSPACE", ""),
 		GitHubToken:   get("GITHUB_TOKEN", ""),
@@ -105,6 +111,11 @@ func LoadConfig() (*Config, error) {
 	}
 	if cfg.Workspace == "" {
 		cfg.Workspace = cfg.DataDir + "/workspace"
+	}
+	// Vault mode: clawvault owns custody, so nanoclaw must NOT hold the secret.
+	// This is also what lets code + wallets coexist (interlock keys on Secret).
+	if cfg.VaultSocket != "" {
+		cfg.Secret = ""
 	}
 	for _, id := range strings.Split(get("FOCUS_CHANNELS", ""), ",") {
 		if id = strings.TrimSpace(id); id != "" {

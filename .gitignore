@@ -5,3 +5,5 @@ data/
 *.log
 .nanoclaw.secret
 *.secret
+clawvault-riscv64
+vault-data/

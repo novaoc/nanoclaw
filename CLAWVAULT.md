@@ -81,8 +81,22 @@ it, and a small daemon enforces it."
 
 ## Status
 
-Interlock: shipped (code and in-process keys are mutually exclusive). The
-daemon, its own `/connect`/confirmation Discord app, deploy signing, and box
-hardening are the next build — deliberately staged so the custody layer is
-written and reviewed carefully rather than rushed. There is no unsafe window in
-the meantime: while keys are in-process, Vela has no shell.
+**Built.** `clawvault/` is the daemon: own keystore (AES-GCM, uid as AAD,
+`0700`), own Bankr client, policy (`policy.go`: fail-closed read-allowlist,
+per-user daily write cap, cooldown, append-only audit), its own Discord app for
+`/connect` + confirmation (`discord.go`), and a Unix-socket API with only
+status/prompt/disconnect (`server.go`) — no op returns a key. nanoclaw talks to
+it via `vaultclient.go`; setting `CLAWVAULT_SOCKET` puts nanoclaw in vault mode
+(no local secret, code capability allowed). Deploy: `deploy/clawvault.service`
+(separate user, `ProtectSystem=strict`, socket shared by group).
+
+Tests: read executes / write queues+one-shot / owner-only execute / daily cap
+(`clawvault/vault_test.go`); socket never emits a `bk_` key; nanoclaw client
+relays and never receives a key (`vaultclient_test.go`).
+
+Still to wire at deploy time (ops, not code): **signed-tag deploys** (the Nano
+runs only binaries Wren signs, `deploy/` included), branch protection on `main`,
+no SSH/self-update for Vela, and nftables egress. Dollar-precise spend caps
+(vs. the current per-day write count) need parsing Bankr's response amounts —
+a follow-up. Honest limit unchanged: root on the Nano, or a bad diff Wren
+signs, still beats all of it.

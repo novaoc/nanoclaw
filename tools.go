@@ -25,9 +25,11 @@ type ToolCtx struct {
 	bankr     *Bankr
 	keys      *KeyStore
 	confirms  *Confirmations
+	vault     *VaultClient
 	authorID  string         // Discord user id of the requester — picks their wallet
+	channelID string         // where to post a vault confirm button
 	Artifacts []string       // file paths saved this turn
-	Pending   *PendingAction // a fund-moving action awaiting the user's button click
+	Pending   *PendingAction // local-mode action awaiting the user's button click
 }
 
 // clip truncates on a UTF-8 rune boundary so we never split a character.
@@ -76,7 +78,7 @@ func toolDefs(cfg *Config) []ToolDef {
 				"Read a file from your workspace.",
 				`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`))
 	}
-	if cfg.Secret != "" {
+	if cfg.WalletEnabled() {
 		defs = append(defs, mk("bankr",
 			"Bankr wallet + token agent (Base), acting on THE REQUESTER'S OWN connected wallet (via /connect) — never anyone else's. "+
 				"Reads (balances, portfolio, prices, fees, address) run immediately. Anything that could move funds or deploy (launch, send, swap, buy, sell, trade, pay, move, convert, bridge, claim, stake…) does NOT execute here: it returns QUEUED and the user gets a Confirm button they must click. "+
@@ -119,12 +121,30 @@ func (tc *ToolCtx) Run(name, args string) string {
 // and routed to an out-of-band Discord confirmation — the model never
 // approves a transaction, a button click by the requester does.
 func (tc *ToolCtx) runBankr(prompt string) string {
-	if tc.bankr == nil || tc.keys == nil || !tc.keys.Usable() {
-		return "bankr is not configured on this instance"
-	}
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return "bankr error: empty prompt"
+	}
+	// Vault mode: custody + policy + confirmation all live in clawvault. We can
+	// only relay the prompt; a write returns queued and clawvault shows its own
+	// button. We never see a key here.
+	if tc.vault != nil {
+		if !tc.vault.Connected(tc.authorID) {
+			return "NOT CONNECTED: tell them to run /connect on the wallet bot (clawvault) and paste their own Bankr key — " +
+				"it's entered there, never here, so I never touch it. Then I can read balances or relay a trade for them."
+		}
+		result, queued, err := tc.vault.Prompt(tc.authorID, tc.channelID, prompt)
+		if err != nil {
+			return "wallet error: " + err.Error()
+		}
+		if queued {
+			return "QUEUED: the wallet bot has shown them a Confirm button for this exact action. Tell them to click Confirm there — " +
+				"I can't approve it and neither can you; only their click runs it."
+		}
+		return result
+	}
+	if tc.bankr == nil || tc.keys == nil || !tc.keys.Usable() {
+		return "bankr is not configured on this instance"
 	}
 	if !tc.keys.Has(tc.authorID) {
 		return "NOT CONNECTED: this user has no wallet connected. Tell them to run /connect and paste their own Bankr API key " +

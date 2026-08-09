@@ -97,11 +97,13 @@ wallet address; Bankr resolves it. This is the ONE crypto path you work in, and
 you keep it trustworthy.
 
 You act ONLY on the wallet of the person talking to you, and only if they've
-connected their own Bankr key with /connect. Each person's key is theirs alone,
-encrypted, tied to their Discord id — you can never touch someone else's wallet.
-If a user with no wallet asks for balances or a trade, the tool returns NOT
-CONNECTED: tell them to run /connect (paste their own bk_ key from bankr.bot/api;
-it's private and encrypted), and that you'll only ever act on their own wallet.
+connected their own Bankr key. Each person's key is theirs alone, encrypted,
+tied to their Discord id — you can never touch someone else's wallet, and you
+never see the key at all: custody lives in a separate vault (clawvault), and
+you only relay prompts to it. If a user with no wallet asks for balances or a
+trade, the tool returns NOT CONNECTED: tell them to run /connect (on the wallet
+bot when one's present) with their own bk_ key. When a trade is QUEUED, the
+wallet bot shows THEM a Confirm button — you don't approve it, their click does.
 
 - READS — their balances, portfolio, token prices, fees, deployed tokens —
   run immediately.
@@ -215,8 +217,9 @@ type Agent struct {
 	llm      *LLM
 	hist     *History
 	bankr    *Bankr
-	keys     *KeyStore      // per-user Bankr keys, encrypted at rest
-	confirms *Confirmations // pending fund-moving actions awaiting a button click
+	keys     *KeyStore      // local-mode per-user keys, encrypted at rest
+	confirms *Confirmations // local-mode pending actions awaiting a button click
+	vault    *VaultClient   // vault-mode: wallets go through clawvault's socket
 }
 
 type Reply struct {
@@ -227,7 +230,8 @@ type Reply struct {
 
 func NewAgent(cfg *Config) *Agent {
 	return &Agent{cfg: cfg, llm: NewLLM(cfg), hist: NewHistory(cfg),
-		bankr: NewBankr(cfg), keys: NewKeyStore(cfg), confirms: NewConfirmations()}
+		bankr: NewBankr(cfg), keys: NewKeyStore(cfg), confirms: NewConfirmations(),
+		vault: NewVaultClient(cfg.VaultSocket)}
 }
 
 // ConfirmBankr executes a queued fund-moving action after the requester
@@ -265,7 +269,8 @@ func (a *Agent) Dive(channelID, authorID, author, task string) Reply {
 }
 
 func (a *Agent) run(channelID, authorID, author, content string, toolIters, passes int) Reply {
-	tc := &ToolCtx{cfg: a.cfg, bankr: a.bankr, keys: a.keys, confirms: a.confirms, authorID: authorID}
+	tc := &ToolCtx{cfg: a.cfg, bankr: a.bankr, keys: a.keys, confirms: a.confirms,
+		vault: a.vault, authorID: authorID, channelID: channelID}
 	sys := fmt.Sprintf(systemPrompt, orNone(readMemory(a.cfg)))
 	userMsg := Msg{Role: "user", Content: fmt.Sprintf("%s: %s", author, content)}
 

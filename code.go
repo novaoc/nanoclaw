@@ -108,24 +108,40 @@ func (tc *ToolCtx) readWorkspaceFile(path string) string {
 }
 
 // SetupGit configures git ONCE at startup so `git push` to https GitHub
-// remotes authenticates as Vela's own account. The token lives only in the
-// bot's own credential file (root-600) and env — same trust as its other
-// secrets. No-op when GITHUB_TOKEN is unset.
+// remotes authenticates as Vela's own account. Crucially it keeps ALL of the
+// bot's git state in an ISOLATED config + credentials file it owns (under the
+// data dir) and never touches the operator's ~/.gitconfig: it points
+// GIT_CONFIG_GLOBAL at the bot's own file and exports that into this process,
+// so every `git` the shell tool runs inherits it. No-op when GITHUB_TOKEN is
+// unset. This matters when nanoclaw runs as a normal user (a dev box / the
+// Mini bench): without it, `git config --global` would hijack that user's
+// identity and credentials.
 func SetupGit(cfg *Config) {
 	if cfg.GitHubToken == "" {
 		return
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
+	dir := filepath.Join(cfg.DataDir, "git")
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs // absolute so git resolves it from any workspace cwd
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	cred := filepath.Join(home, ".git-credentials")
+	cred := filepath.Join(dir, "credentials")
 	line := "https://x-access-token:" + cfg.GitHubToken + "@github.com\n"
 	if err := os.WriteFile(cred, []byte(line), 0o600); err != nil {
 		return
 	}
-	run := func(args ...string) { _ = exec.Command("git", args...).Run() }
-	run("config", "--global", "credential.helper", "store")
+	gc := filepath.Join(dir, "config")
+	// Export to THIS process so the shell tool's git subprocesses use it too.
+	_ = os.Setenv("GIT_CONFIG_GLOBAL", gc)
+	env := append(os.Environ(), "GIT_CONFIG_GLOBAL="+gc)
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Env = env
+		_ = cmd.Run()
+	}
+	run("config", "--global", "credential.helper", "store --file="+cred)
 	run("config", "--global", "--add", "safe.directory", "*")
 	if cfg.GitName != "" {
 		run("config", "--global", "user.name", cfg.GitName)

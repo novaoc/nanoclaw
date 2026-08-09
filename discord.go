@@ -123,8 +123,20 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	content = strings.ReplaceAll(content, "<@"+s.State.User.ID+">", "")
 	content = strings.ReplaceAll(content, "<@!"+s.State.User.ID+">", "")
 	content = strings.TrimSpace(content)
+
+	// Pick up any image attachments for the vision pass.
+	var images []string
+	for _, at := range m.Attachments {
+		if strings.HasPrefix(at.ContentType, "image/") || isImageName(at.Filename) {
+			images = append(images, at.URL)
+		}
+	}
 	if content == "" {
-		content = "hello"
+		if len(images) > 0 {
+			content = "what's in this image?"
+		} else {
+			content = "hello"
+		}
 	}
 
 	go func() {
@@ -141,7 +153,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 				}
 			}
 		}()
-		reply := b.agent.Handle(m.ChannelID, m.Author.ID, m.Author.Username, content)
+		reply := b.agent.Handle(m.ChannelID, m.Author.ID, m.Author.Username, content, images...)
 		close(stop)
 		b.send(m.ChannelID, m.Reference(), reply)
 	}()

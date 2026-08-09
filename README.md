@@ -143,6 +143,20 @@ card images to Discord on request. No key needed for either.
 JSON API), falling back to DuckDuckGo otherwise. `attach_image` fetches any
 image URL (SSRF-guarded, ≤8MB, image content-types only) and posts it.
 
+### Reading images (vision)
+
+Attach a picture and Vela can *see* it. When `NANOCLAW_VISION_MODEL` is set (a
+multimodal model on your endpoint — default `stepfun/step-3.7-flash`), any
+image on a message is read by the vision model first and folded into the turn,
+so the normal tool loop can act on it.
+
+> **@vela** *(photo of a card)* what's this worth?
+> → reads "Mega Charizard X ex, set M2, #110, JP", prices it from rarebox-data → **$713.40**
+
+The image bytes are fetched SSRF-guarded (≤5MB, image types only) and inlined
+to the model; whatever text is *in* the picture is treated as data, never as an
+instruction. Blank `NANOCLAW_VISION_MODEL` turns image reading off.
+
 ### Mentions — quick turns
 
 > **@nanoclaw** mock up a landing page for a TCG price-alert app — dark, one CTA

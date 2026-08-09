@@ -15,6 +15,9 @@ func atoiOr(s string, def int) int {
 	return def
 }
 
+// VisionEnabled reports whether Vela can read images sent to Discord.
+func (c *Config) VisionEnabled() bool { return c.VisionModel != "" }
+
 // CodeEnabled reports whether the shell/file tools may run — gated to an
 // explicit coder allowlist (NANOCLAW_CODERS). A shell is root-level trust on
 // the box, so an empty allowlist turns the whole capability off.
@@ -27,6 +30,7 @@ type Config struct {
 	DeepseekKey   string
 	DeepseekURL   string // OpenAI-compatible base, default api.deepseek.com
 	Model         string
+	VisionModel   string // NANOCLAW_VISION_MODEL — reads images sent to Discord; "" disables
 	DataDir       string
 	FocusChannels map[string]bool // channel IDs answered without a mention
 	MaxToolIters  int
@@ -78,6 +82,7 @@ func LoadConfig() (*Config, error) {
 		DeepseekKey:   get("DEEPSEEK_API_KEY", ""),
 		DeepseekURL:   get("DEEPSEEK_API_URL", "https://api.deepseek.com"),
 		Model:         get("NANOCLAW_MODEL", "deepseek-chat"),
+		VisionModel:   get("NANOCLAW_VISION_MODEL", "stepfun/step-3.7-flash"),
 		DataDir:       get("NANOCLAW_DATA", "data"),
 		FocusChannels: map[string]bool{},
 		MaxToolIters:  8,

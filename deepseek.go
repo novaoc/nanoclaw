@@ -44,6 +44,26 @@ type chatRequest struct {
 	MaxTok   int       `json:"max_tokens,omitempty"`
 }
 
+// Multimodal request shapes (OpenAI vision format): the user message content
+// is an array of text/image parts instead of a plain string.
+type visionImgURL struct {
+	URL string `json:"url"`
+}
+type visionPart struct {
+	Type     string        `json:"type"`
+	Text     string        `json:"text,omitempty"`
+	ImageURL *visionImgURL `json:"image_url,omitempty"`
+}
+type visionMsg struct {
+	Role    string       `json:"role"`
+	Content []visionPart `json:"content"`
+}
+type visionRequest struct {
+	Model    string      `json:"model"`
+	Messages []visionMsg `json:"messages"`
+	MaxTok   int         `json:"max_tokens,omitempty"`
+}
+
 type chatResponse struct {
 	Choices []struct {
 		Message Msg `json:"message"`
@@ -74,6 +94,12 @@ func (l *LLM) Chat(messages []Msg, tools []ToolDef) (*Msg, error) {
 	if err != nil {
 		return nil, err
 	}
+	return l.post(body)
+}
+
+// post sends a pre-marshalled chat/completions body and retries transient
+// failures. Shared by Chat (tool loop) and Vision (multimodal one-shot).
+func (l *LLM) post(body []byte) (*Msg, error) {
 	// Inference providers 429/503 under load routinely — retry with backoff
 	// instead of surfacing a transient blip to the channel.
 	var lastErr error
@@ -115,4 +141,27 @@ func (l *LLM) Chat(messages []Msg, tools []ToolDef) (*Msg, error) {
 		return &out.Choices[0].Message, nil
 	}
 	return nil, fmt.Errorf("provider unavailable after retries: %w", lastErr)
+}
+
+// Vision runs one multimodal turn on the vision model and returns its text.
+// Images are data-URI or https strings in OpenAI's image_url format. The
+// vision model is a reasoner, so give it room (4096) before its content lands.
+func (l *LLM) Vision(model, prompt string, imageURLs []string) (string, error) {
+	parts := []visionPart{{Type: "text", Text: prompt}}
+	for _, u := range imageURLs {
+		parts = append(parts, visionPart{Type: "image_url", ImageURL: &visionImgURL{URL: u}})
+	}
+	body, err := json.Marshal(visionRequest{
+		Model:    model,
+		Messages: []visionMsg{{Role: "user", Content: parts}},
+		MaxTok:   4096,
+	})
+	if err != nil {
+		return "", err
+	}
+	msg, err := l.post(body)
+	if err != nil {
+		return "", err
+	}
+	return msg.Content, nil
 }

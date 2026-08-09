@@ -33,9 +33,12 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 	if err != nil {
 		return nil, err
 	}
+	// NOTE: no Server Members (GuildMembers) privileged intent — moderation
+	// resolves members via REST (GuildMember/GuildMembersSearch), which needs no
+	// gateway intent. Requesting a privileged intent that isn't enabled in the
+	// Developer Portal would make Open() fail and crash-loop the bot offline.
 	s.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages |
-		discordgo.IntentMessageContent | discordgo.IntentsDirectMessages |
-		discordgo.IntentsGuildMembers // member resolution for moderation
+		discordgo.IntentMessageContent | discordgo.IntentsDirectMessages
 	b := &Bot{cfg: cfg, agent: agent, session: s, locks: make(chan struct{}, cfg.Concurrency)}
 	s.AddHandler(b.onMessage)
 	s.AddHandler(b.onReady)

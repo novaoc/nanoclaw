@@ -61,11 +61,13 @@ func fullMemory(cfg *Config) string {
 	return string(b)
 }
 
-// clearMemory wipes long-term memory (admin action).
+// clearMemory sets long-term memory aside (admin action). It RENAMES to
+// MEMORY.md.bak rather than deleting — an accidental purge of months of server
+// context is the likelier mistake than poisoning, so keep it recoverable.
 func clearMemory(cfg *Config) error {
 	memMu.Lock()
 	defer memMu.Unlock()
-	err := os.Remove(memoryPath(cfg))
+	err := os.Rename(memoryPath(cfg), memoryPath(cfg)+".bak")
 	if os.IsNotExist(err) {
 		return nil
 	}

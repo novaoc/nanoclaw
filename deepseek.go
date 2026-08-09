@@ -111,7 +111,11 @@ func (l *LLM) post(ctx context.Context, body []byte) (*Msg, error) {
 	var lastErr error
 	for attempt := 0; attempt < 4; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt*attempt) * 2 * time.Second) // 2s, 8s, 18s
+			select { // don't burn the backoff sleep past the turn deadline
+			case <-ctx.Done():
+				return nil, fmt.Errorf("turn deadline reached: %w", ctx.Err())
+			case <-time.After(time.Duration(attempt*attempt) * 2 * time.Second): // 2s, 8s, 18s
+			}
 		}
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("turn deadline reached: %w", ctx.Err())

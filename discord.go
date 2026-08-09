@@ -114,14 +114,25 @@ func (b *Bot) onMemoryCommand(s *discordgo.Session, i *discordgo.InteractionCrea
 			ephemeral(s, i, "Couldn't clear it: "+err.Error())
 			return
 		}
-		ephemeral(s, i, "🧹 Long-term memory wiped.")
+		ephemeral(s, i, "🧹 Long-term memory set aside (kept as MEMORY.md.bak, recoverable over SSH).")
 	default: // view
 		m := strings.TrimSpace(fullMemory(b.cfg))
 		if m == "" {
 			ephemeral(s, i, "Memory is empty.")
 			return
 		}
-		ephemeral(s, i, "```\n"+clip(m, 1800)+"\n```")
+		if len(m) > 1800 { // too long to inline — attach the whole file
+			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Long-term memory (attached — full file):",
+					Flags:   discordgo.MessageFlagsEphemeral,
+					Files:   []*discordgo.File{{Name: "MEMORY.md", Reader: strings.NewReader(m)}},
+				},
+			})
+			return
+		}
+		ephemeral(s, i, "```\n"+m+"\n```")
 	}
 }
 

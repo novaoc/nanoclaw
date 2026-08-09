@@ -167,12 +167,22 @@ func (tc *ToolCtx) Run(name, args string) string {
 // blockedIP rejects anything that could reach the local box or its LAN —
 // loopback, RFC1918/4193 private, link-local, unspecified, and CGNAT.
 func blockedIP(ip net.IP) bool {
+	// stdlib checks all call To4() internally, so IPv4-mapped IPv6
+	// (::ffff:192.168.1.1) is unwrapped and caught here too.
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
 		return true
 	}
-	if v4 := ip.To4(); v4 != nil && v4[0] == 100 && v4[1]&0xc0 == 64 { // 100.64.0.0/10 CGNAT
-		return true
+	// v4 (and mapped v6, which To4 unwraps) ranges the stdlib doesn't cover.
+	if v4 := ip.To4(); v4 != nil {
+		switch {
+		case v4[0] == 0: // 0.0.0.0/8 — Linux routes the whole block to localhost
+			return true
+		case v4[0] == 255 && v4[1] == 255 && v4[2] == 255 && v4[3] == 255: // limited broadcast
+			return true
+		case v4[0] == 100 && v4[1]&0xc0 == 64: // 100.64.0.0/10 CGNAT
+			return true
+		}
 	}
 	return false
 }

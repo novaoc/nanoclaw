@@ -91,8 +91,16 @@ func TestAgentLoopWithTools(t *testing.T) {
 }
 
 func TestAgentToolBudget(t *testing.T) {
+	// The model loops forever on tool calls; the agent must cut it off and then
+	// force a FINAL tools-off answer (no dead-end "ask me to continue").
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// model loops forever on tool calls — the agent must cut it off
+		var req chatRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Tools) == 0 {
+			// the forced wrap-up call (tools disabled) → produce a partial answer
+			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"here's the partial answer from what I gathered"}}]}`))
+			return
+		}
 		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[
 			{"id":"x","type":"function","function":{"name":"remember","arguments":"{\"note\":\"n\"}"}}]}}]}`))
 	}))
@@ -101,8 +109,11 @@ func TestAgentToolBudget(t *testing.T) {
 	cfg.DeepseekURL = srv.URL
 	cfg.MaxToolIters = 3
 	r := NewAgent(cfg).Handle("c", "u1", "u", "hi")
-	if !strings.Contains(r.Text, "tool budget") {
-		t.Fatalf("expected budget cutoff, got %q", r.Text)
+	if !strings.Contains(r.Text, "partial answer from what I gathered") {
+		t.Fatalf("expected a forced partial answer on budget exhaustion, got %q", r.Text)
+	}
+	if strings.Contains(strings.ToLower(r.Text), "ask me to continue") {
+		t.Fatalf("must not dead-end with 'ask me to continue': %q", r.Text)
 	}
 }
 

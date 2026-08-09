@@ -44,6 +44,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("discord: %v", err)
 	}
+	agent.SetDiscord(bot) // let tools act in Discord (moderation, forum posts)
 	if err := bot.Start(); err != nil {
 		log.Fatalf("discord connect: %v", err)
 	}

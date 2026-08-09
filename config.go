@@ -4,9 +4,38 @@ import (
 	"bufio"
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// focusPath persists runtime /focus channel choices next to the data dir.
+func focusPath(dataDir string) string { return filepath.Join(dataDir, "focus-channels.txt") }
+
+func loadFocus(dataDir string) []string {
+	b, err := os.ReadFile(focusPath(dataDir))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func saveFocus(dataDir string, ids map[string]bool) {
+	var b strings.Builder
+	for id, on := range ids {
+		if on {
+			b.WriteString(id + "\n")
+		}
+	}
+	_ = os.WriteFile(focusPath(dataDir), []byte(b.String()), 0o644)
+}
 
 func atoiOr(s string, def int) int {
 	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n >= 1 && n <= 5 {
@@ -60,10 +89,12 @@ type Config struct {
 
 	Coders      map[string]bool // Discord IDs allowed to run shell/code (root-trust)
 	RepoUsers   map[string]bool // Discord IDs allowed the github API tool; empty = everyone
+	Mods        map[string]bool // Discord IDs allowed moderation (NANOCLAW_MODS); empty = off
 	Workspace   string          // where code lives + shell runs
 	GitHubToken string          // GITHUB_TOKEN — enables authenticated push
 	GitName     string          // commit identity (Vela's own account)
 	GitEmail    string
+	Secrets     *SecretStore // ephemeral deploy-key store (never in prompt/history)
 }
 
 // LoadConfig reads /etc/nanoclaw.env then ./nanoclaw.env (later wins),
@@ -113,6 +144,7 @@ func LoadConfig() (*Config, error) {
 		BraveKey:      get("BRAVE_API_KEY", ""),
 		Coders:        map[string]bool{},
 		RepoUsers:     map[string]bool{},
+		Mods:          map[string]bool{},
 		Workspace:     get("NANOCLAW_WORKSPACE", ""),
 		GitHubToken:   get("GITHUB_TOKEN", ""),
 		GitName:       get("GIT_NAME", "Vela"),
@@ -135,6 +167,18 @@ func LoadConfig() (*Config, error) {
 		if id = strings.TrimSpace(id); id != "" {
 			cfg.RepoUsers[id] = true
 		}
+	}
+	for _, id := range strings.Split(get("NANOCLAW_MODS", ""), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			cfg.Mods[id] = true
+		}
+	}
+	// Deploy-secret store: TTL backstop so a forgotten key doesn't linger.
+	ttl := time.Duration(clampInt(get("NANOCLAW_SECRET_TTL_MIN", ""), 120, 1, 1440)) * time.Minute
+	cfg.Secrets = NewSecretStore(cfg.DataDir, ttl)
+	// Focus channels persisted at runtime via /focus (merged with the env list).
+	for _, id := range loadFocus(cfg.DataDir) {
+		cfg.FocusChannels[id] = true
 	}
 	if cfg.DiscordToken == "" {
 		return nil, errors.New("DISCORD_TOKEN is required (nanoclaw.env or environment)")

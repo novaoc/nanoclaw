@@ -24,6 +24,9 @@ import (
 type ToolCtx struct {
 	cfg       *Config
 	authorID  string   // Discord user id of the requester — gates the coder allowlist
+	guildID   string   // guild of the current turn (for Discord actions)
+	channelID string   // channel of the current turn
+	disc      Discord  // Discord actuator (nil in headless/eval)
 	Artifacts []string // file paths saved this turn
 	usedWeb   bool     // this turn touched the web (fetch/search)
 	usedCode  bool     // this turn ran code (shell/file) — mutually exclusive with web
@@ -84,6 +87,20 @@ func toolDefs(cfg *Config) []ToolDef {
 				"scores align 1:1 with benchmarks; use null where a model doesn't report that benchmark. "+
 				"Keep model order stable across re-renders (append newly requested models at the end) so each model keeps its color.",
 			`{"type":"object","properties":{"title":{"type":"string","description":"chart title, e.g. 'DeepSeek-V4 vs Llama 3.1 405B'"},"source":{"type":"string","description":"short provenance note with a date, e.g. 'vendor model cards · Aug 2026'"},"benchmarks":{"type":"array","items":{"type":"string"},"description":"benchmark names, e.g. MMLU-Pro, GPQA Diamond, SWE-bench Verified (max 10)"},"models":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"scores":{"type":"array","items":{"type":["number","null"]}}},"required":["name","scores"]},"description":"one entry per model (max 8), scores aligned to benchmarks"}},"required":["benchmarks","models"]}`),
+		mk("model_releases",
+			"Check Hugging Face for recent model releases from the labs worth tracking (DeepSeek, Qwen, Meta Llama, Mistral, Google, OpenAI oss, Microsoft, etc.). "+
+				"Optional query filters to one lab/name (e.g. 'qwen', 'deepseek'). Returns model id, lab, date, and downloads, newest first, and flags which are NEW since the last check. Use for 'any new models out?' / 'what did deepseek just drop?'.",
+			`{"type":"object","properties":{"query":{"type":"string","description":"optional: a lab or name to filter (qwen|deepseek|llama|...)"}}}`),
+		mk("discord_forum",
+			"Post in a Discord FORUM channel on request. action=post creates a new forum post/thread (needs channel=<forum name or id>, title, body); action=reply adds a message to an existing post/thread (needs thread=<thread id or its title/name>, body). Use when asked to 'post an intro in the introductions forum' or 'reply to that forum post'. Write the content in Vela's voice.",
+			`{"type":"object","properties":{"action":{"type":"string","description":"post|reply"},"channel":{"type":"string","description":"forum channel name or id (for post)"},"title":{"type":"string","description":"post title (for post)"},"thread":{"type":"string","description":"thread id or title (for reply)"},"body":{"type":"string","description":"the message content"}},"required":["action","body"]}`),
+	}
+	if len(cfg.Mods) > 0 { // moderation only when a mod allowlist is configured
+		defs = append(defs, mk("moderate",
+			"Discord moderation — ONLY act on an explicit request from an authorized moderator. action=timeout|kick|ban|delete|slowmode. "+
+				"user=<@mention/id/username> for timeout/kick/ban; duration like '10m'/'1h'/'1d' for timeout; reason is logged; "+
+				"delete removes a specific message (message=<id> in the current channel); slowmode sets per-user seconds (0 clears) on the current channel. Always state what you did and why.",
+			`{"type":"object","properties":{"action":{"type":"string","description":"timeout|kick|ban|delete|slowmode"},"user":{"type":"string"},"duration":{"type":"string","description":"timeout length e.g. 10m, 1h, 1d"},"reason":{"type":"string"},"message":{"type":"string","description":"message id to delete"},"days":{"type":"integer","description":"slowmode seconds, or ban message-delete days"}},"required":["action"]}`))
 	}
 	if cfg.GithubEnabled() { // API only — no shell; gated by NANOCLAW_REPO_USERS (empty = everyone)
 		defs = append(defs, mk("github",
@@ -105,6 +122,14 @@ func toolDefs(cfg *Config) []ToolDef {
 			mk("read_file",
 				"Read a file from your workspace.",
 				`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`))
+		names := cfg.Secrets.Names()
+		desc := "Wipe deploy secrets from memory and disk when a deploy/task is done (do this as soon as you no longer need them). "
+		if len(names) > 0 {
+			desc += "Currently held (values hidden, injected into shell as these env vars): " + strings.Join(names, ", ") + "."
+		} else {
+			desc += "None are set right now — a coder adds them with /keys."
+		}
+		defs = append(defs, mk("clear_secrets", desc, `{"type":"object","properties":{}}`))
 	}
 	return defs
 }
@@ -113,6 +138,7 @@ type toolArgs struct {
 	Query, URL, Name, Content, Note, Command, Path, Game, Set          string
 	Action, Description, Repo, Message, Branch, Title, Head, Base, Body string
 	Kind, Number, Symbol, Source                                       string
+	User, Reason, Channel, Thread, Duration                            string // moderation + forum
 	Days                                                               int
 	Private                                                            bool
 	Benchmarks                                                         []string
@@ -132,7 +158,7 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// attach_image counts as web: its bytes never reach the model, but it IS an
 	// arbitrary outbound GET — after a code turn (which can read env/tokens) it
 	// would otherwise be an exfiltration channel via the URL.
-	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart" || name == "attach_image"
+	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart" || name == "attach_image" || name == "model_releases"
 	code := name == "shell" || name == "write_file" || name == "read_file" || name == "github"
 	if web && tc.usedCode {
 		return "REFUSED: web fetch blocked — this turn already ran code or a GitHub write, and untrusted page content must not mix with those. Do the browsing in a separate message."
@@ -168,6 +194,15 @@ func (tc *ToolCtx) Run(name, args string) string {
 		return tc.saveArtifact(a.Name, a.Content)
 	case "remember":
 		return appendMemory(tc.cfg, a.Note)
+	case "clear_secrets":
+		return tc.clearSecrets()
+	case "model_releases":
+		tc.usedWeb = true
+		return tc.modelReleases(a.Query)
+	case "moderate":
+		return tc.moderate(a)
+	case "discord_forum":
+		return tc.discordForum(a)
 	// The code handlers set usedCode themselves AFTER their allowlist gates
 	// pass — a REFUSED call ran nothing, so it must not poison the rest of the
 	// turn (blocking every later web tool with "this turn already ran code").

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -33,7 +34,8 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 		return nil, err
 	}
 	s.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages |
-		discordgo.IntentMessageContent | discordgo.IntentsDirectMessages
+		discordgo.IntentMessageContent | discordgo.IntentsDirectMessages |
+		discordgo.IntentsGuildMembers // member resolution for moderation
 	b := &Bot{cfg: cfg, agent: agent, session: s, locks: make(chan struct{}, cfg.Concurrency)}
 	s.AddHandler(b.onMessage)
 	s.AddHandler(b.onReady)
@@ -67,6 +69,36 @@ func appCommands() []*discordgo.ApplicationCommand {
 				Choices: []*discordgo.ApplicationCommandOptionChoice{
 					{Name: "view", Value: "view"},
 					{Name: "clear", Value: "clear"},
+				},
+			}},
+		},
+		{
+			Name:        "keys",
+			Description: "Hand Vela a deploy secret privately, list, or wipe (coders only)",
+			Options: []*discordgo.ApplicationCommandOption{{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "action",
+				Description: "add a key (private popup), list names, or clear all",
+				Required:    true,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "add", Value: "add"},
+					{Name: "list", Value: "list"},
+					{Name: "clear", Value: "clear"},
+				},
+			}},
+		},
+		{
+			Name:        "focus",
+			Description: "Toggle this channel for mention-free replies (admins only)",
+			Options: []*discordgo.ApplicationCommandOption{{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "action",
+				Description: "on, off, or status for this channel",
+				Required:    true,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "on", Value: "on"},
+					{Name: "off", Value: "off"},
+					{Name: "status", Value: "status"},
 				},
 			}},
 		},
@@ -137,6 +169,103 @@ func (b *Bot) onMemoryCommand(s *discordgo.Session, i *discordgo.InteractionCrea
 	}
 }
 
+// onKeysCommand handles /keys — coder-only. "add" opens a MODAL so the secret
+// value is typed into a private popup, never into visible channel text.
+func (b *Bot) onKeysCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	_, uid := interactionUser(i)
+	if !b.cfg.Coders[uid] {
+		ephemeral(s, i, "That's coder-only (the deploy-key allowlist). Ask Aregus.")
+		return
+	}
+	switch i.ApplicationCommandData().Options[0].StringValue() {
+	case "add":
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseModal,
+			Data: &discordgo.InteractionResponseData{
+				CustomID: "keys_add",
+				Title:    "Add a deploy secret",
+				Components: []discordgo.MessageComponent{
+					discordgo.ActionsRow{Components: []discordgo.MessageComponent{discordgo.TextInput{
+						CustomID: "name", Label: "Name (e.g. HETZNER_TOKEN)", Style: discordgo.TextInputShort,
+						Placeholder: "HETZNER_TOKEN", Required: true, MaxLength: 64,
+					}}},
+					discordgo.ActionsRow{Components: []discordgo.MessageComponent{discordgo.TextInput{
+						CustomID: "value", Label: "Value (hidden; never shown in chat)", Style: discordgo.TextInputParagraph,
+						Required: true, MaxLength: 4000,
+					}}},
+				},
+			},
+		})
+	case "clear":
+		n := b.cfg.Secrets.Clear()
+		ephemeral(s, i, fmt.Sprintf("🧹 Wiped %d secret(s) from memory and disk.", n))
+	default: // list
+		names := b.cfg.Secrets.Names()
+		if len(names) == 0 {
+			ephemeral(s, i, "No secrets set. Add one with `/keys add`.")
+			return
+		}
+		ephemeral(s, i, "🔐 Held (values hidden): "+strings.Join(names, ", ")+"\nThey're injected into shell by name; I'll wipe them with clear_secrets when the task's done, or `/keys clear`.")
+	}
+}
+
+// onModalSubmit stores a submitted secret. The value never touches the model,
+// channel history, or the logs — only the confirmation (by name) is shown.
+func (b *Bot) onModalSubmit(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.ModalSubmitData().CustomID != "keys_add" {
+		return
+	}
+	_, uid := interactionUser(i)
+	if !b.cfg.Coders[uid] {
+		ephemeral(s, i, "Coder-only.")
+		return
+	}
+	var name, value string
+	for _, row := range i.ModalSubmitData().Components {
+		for _, c := range row.(*discordgo.ActionsRow).Components {
+			ti := c.(*discordgo.TextInput)
+			switch ti.CustomID {
+			case "name":
+				name = ti.Value
+			case "value":
+				value = ti.Value
+			}
+		}
+	}
+	stored, err := b.cfg.Secrets.Set(name, value)
+	if err != nil {
+		ephemeral(s, i, "Couldn't store that: "+err.Error())
+		return
+	}
+	log.Printf("secret set name=%s by=%s (value hidden)", stored, uid)
+	ephemeral(s, i, fmt.Sprintf("🔐 Stored **%s** (value hidden). It's available to shell as $%s; I'll wipe it when the deploy's done or on `/keys clear`.", stored, stored))
+}
+
+// onFocusCommand toggles the current channel for mention-free replies (admins).
+func (b *Bot) onFocusCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	_, uid := interactionUser(i)
+	if !b.cfg.Coders[uid] {
+		ephemeral(s, i, "That's admin-only (the coder allowlist).")
+		return
+	}
+	switch i.ApplicationCommandData().Options[0].StringValue() {
+	case "on":
+		b.cfg.FocusChannels[i.ChannelID] = true
+		saveFocus(b.cfg.DataDir, b.cfg.FocusChannels)
+		ephemeral(s, i, "✅ I'll now reply in this channel without needing an @mention.")
+	case "off":
+		delete(b.cfg.FocusChannels, i.ChannelID)
+		saveFocus(b.cfg.DataDir, b.cfg.FocusChannels)
+		ephemeral(s, i, "✅ Back to mention-only in this channel.")
+	default:
+		if b.cfg.FocusChannels[i.ChannelID] {
+			ephemeral(s, i, "This channel is a focus channel — I reply here without a mention.")
+		} else {
+			ephemeral(s, i, "Mention-only here. `/focus on` to change that.")
+		}
+	}
+}
+
 func interactionUser(i *discordgo.InteractionCreate) (name, id string) {
 	if i.Member != nil && i.Member.User != nil {
 		return i.Member.User.Username, i.Member.User.ID
@@ -148,12 +277,22 @@ func interactionUser(i *discordgo.InteractionCreate) (name, id string) {
 }
 
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type == discordgo.InteractionModalSubmit {
+		b.onModalSubmit(s, i)
+		return
+	}
 	if i.Type != discordgo.InteractionApplicationCommand {
 		return
 	}
 	switch i.ApplicationCommandData().Name {
 	case "memory":
 		b.onMemoryCommand(s, i)
+		return
+	case "keys":
+		b.onKeysCommand(s, i)
+		return
+	case "focus":
+		b.onFocusCommand(s, i)
 		return
 	case "dive":
 	default:
@@ -181,7 +320,7 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		defer atomic.AddInt32(&b.pending, -1)
 		b.locks <- struct{}{}
 		defer func() { <-b.locks }()
-		reply := b.agent.Dive(i.ChannelID, authorID, author, task)
+		reply := b.agent.DiveTurn(Turn{ChannelID: i.ChannelID, GuildID: i.GuildID, AuthorID: authorID, Author: author}, task)
 		chunks := splitMessage("🌀 **dive**: "+task+"\n\n"+reply.Text, 1990)
 		for n, chunk := range chunks {
 			params := &discordgo.WebhookParams{Content: chunk}
@@ -299,7 +438,10 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 				}
 			}
 		}()
-		reply := b.agent.Handle(m.ChannelID, m.Author.ID, m.Author.Username, content, images...)
+		reply := b.agent.HandleTurn(Turn{
+			ChannelID: m.ChannelID, GuildID: m.GuildID,
+			AuthorID: m.Author.ID, Author: m.Author.Username, ImageURLs: images,
+		}, content)
 		close(stop)
 		b.send(m.ChannelID, m.Reference(), reply)
 	}()

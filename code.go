@@ -63,6 +63,9 @@ func (tc *ToolCtx) runShell(command string) string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = tc.cfg.Workspace
+	// Inject submitted deploy secrets as env vars (by name) so a command can use
+	// $HETZNER_TOKEN etc. without the value ever entering the model's context.
+	cmd.Env = append(os.Environ(), tc.cfg.Secrets.EnvPairs()...)
 	out, err := cmd.CombinedOutput()
 	res := string(out)
 	if ctx.Err() == context.DeadlineExceeded {

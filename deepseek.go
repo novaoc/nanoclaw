@@ -58,10 +58,14 @@ type visionMsg struct {
 	Role    string       `json:"role"`
 	Content []visionPart `json:"content"`
 }
+type reasoningCfg struct {
+	MaxTokens int `json:"max_tokens,omitempty"`
+}
 type visionRequest struct {
-	Model    string      `json:"model"`
-	Messages []visionMsg `json:"messages"`
-	MaxTok   int         `json:"max_tokens,omitempty"`
+	Model     string        `json:"model"`
+	Messages  []visionMsg   `json:"messages"`
+	MaxTok    int           `json:"max_tokens,omitempty"`
+	Reasoning *reasoningCfg `json:"reasoning,omitempty"`
 }
 
 type chatResponse struct {
@@ -144,17 +148,20 @@ func (l *LLM) post(body []byte) (*Msg, error) {
 }
 
 // Vision runs one multimodal turn on the vision model and returns its text.
-// Images are data-URI or https strings in OpenAI's image_url format. The
-// vision model is a reasoner, so give it room (4096) before its content lands.
+// Images are data-URI or https strings in OpenAI's image_url format. The vision
+// model is a reasoner that can think past the token budget and return EMPTY
+// content (finish_reason "length"); we cap its thinking so the answer always
+// lands, and still give the overall response generous room.
 func (l *LLM) Vision(model, prompt string, imageURLs []string) (string, error) {
 	parts := []visionPart{{Type: "text", Text: prompt}}
 	for _, u := range imageURLs {
 		parts = append(parts, visionPart{Type: "image_url", ImageURL: &visionImgURL{URL: u}})
 	}
 	body, err := json.Marshal(visionRequest{
-		Model:    model,
-		Messages: []visionMsg{{Role: "user", Content: parts}},
-		MaxTok:   4096,
+		Model:     model,
+		Messages:  []visionMsg{{Role: "user", Content: parts}},
+		MaxTok:    6000,
+		Reasoning: &reasoningCfg{MaxTokens: 2000},
 	})
 	if err != nil {
 		return "", err

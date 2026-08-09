@@ -64,7 +64,7 @@ func toolDefs(cfg *Config) []ToolDef {
 			"Append a durable note to long-term memory (survives reboots, shared across all channels). Use for server preferences, ongoing projects, decisions.",
 			`{"type":"object","properties":{"note":{"type":"string"}},"required":["note"]}`),
 	}
-	if len(cfg.Coders) > 0 {
+	if cfg.CodeEnabled() { // off while this process holds wallet keys (interlock)
 		defs = append(defs,
 			mk("shell",
 				"Run a shell command in your code workspace (persists across turns). Use for git (clone/commit/push to your GitHub), installing libraries, running builds/tests, scaffolding. 180s timeout. You run on a 256MB single-core RISC-V board — keep it light; for heavy builds, push and let CI compile.",
@@ -278,10 +278,15 @@ func fetchURL(u string) string {
 
 var unsafeName = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 
+const maxArtifactBytes = 1 << 20 // 1 MB — plenty for HTML/code/docs; bounds SD + runaway generations
+
 func (tc *ToolCtx) saveArtifact(name, content string) string {
 	name = unsafeName.ReplaceAllString(filepath.Base(name), "-")
 	if name == "" || name == "." {
 		return "artifact error: bad name"
+	}
+	if len(content) > maxArtifactBytes {
+		return fmt.Sprintf("artifact error: too large (%d bytes, max %d) — trim it or split it", len(content), maxArtifactBytes)
 	}
 	path := filepath.Join(tc.cfg.DataDir, "artifacts",
 		fmt.Sprintf("%d-%s", time.Now().Unix(), name))

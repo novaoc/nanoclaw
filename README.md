@@ -146,6 +146,15 @@ Blank allowlist = the capability is entirely off; non-coders are refused in
 code. `write_file`/`read_file` are confined to the workspace (no `..` escape);
 `shell` is deliberately unconfined for those who pass the allowlist.
 
+**Custody/execution interlock.** Code and in-process wallet keys are mutually
+exclusive: while this process holds `NANOCLAW_SECRET`, the shell/file tools are
+**disabled** (not offered, and refused if called) — otherwise a shell could
+read the secret and every user's keys. To run both, key custody moves to a
+separate process (**[clawvault](CLAWVAULT.md)**) so nanoclaw no longer holds
+the secret. That split — plus signed-tag deploys and box hardening — is the
+architecture in [CLAWVAULT.md](CLAWVAULT.md); the interlock ships today so
+there's no unsafe window.
+
 **Hardware reality — she's a 22×36 mm board, not a build server.** The
 LicheeRV Nano is one ~1 GHz RISC-V core + **256 MB RAM**. Great for git, small
 scripts, config, and lightweight installs; a big `npm install`, a from-source

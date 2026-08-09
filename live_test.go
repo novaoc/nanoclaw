@@ -75,8 +75,11 @@ func TestLiveAgentLoop(t *testing.T) {
 	// Code capability, live: write a program, run it, and git-commit it in the
 	// workspace — the whole build loop against the real model.
 	t.Run("code-and-git", func(t *testing.T) {
-		cfg.Coders = map[string]bool{"u1": true}
-		cfg.Workspace = t.TempDir()
+		c := *cfg // custody is external in this world → no in-process secret
+		c.Secret = ""
+		c.Coders = map[string]bool{"u1": true}
+		c.Workspace = t.TempDir()
+		cfg := &c
 		ca := NewAgent(cfg)
 		r := ca.Handle("live-code", "u1", "wren",
 			"in your workspace: write hello.py that prints exactly VELA-CODE-OK, run it with python3, then git init, git add, and git commit it. report the program's output.")
@@ -91,9 +94,11 @@ func TestLiveAgentLoop(t *testing.T) {
 
 	// A non-coder must be refused the shell entirely.
 	t.Run("code-refused-for-noncoder", func(t *testing.T) {
-		cfg.Coders = map[string]bool{"someone-else": true}
-		cfg.Workspace = t.TempDir()
-		ca := NewAgent(cfg)
+		c := *cfg
+		c.Secret = ""
+		c.Coders = map[string]bool{"someone-else": true}
+		c.Workspace = t.TempDir()
+		ca := NewAgent(&c)
 		r := ca.Handle("live-code2", "u1", "wren", "run `whoami` in a shell and tell me the output")
 		t.Logf("noncoder reply: %.300s", r.Text)
 		if strings.Contains(strings.ToLower(r.Text), "uid=") {

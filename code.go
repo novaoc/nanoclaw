@@ -21,6 +21,22 @@ func (tc *ToolCtx) isCoder() bool { return tc.cfg.Coders[tc.authorID] }
 const coderOnly = "REFUSED: running code/shell is limited to the coder allowlist (NANOCLAW_CODERS). " +
 	"Tell this user they're not authorized to run commands on the box."
 
+const codeInterlock = "REFUSED: code/shell is disabled because this process also holds wallet keys " +
+	"(NANOCLAW_SECRET). Custody and code execution must run in SEPARATE processes — a shell here could " +
+	"read the secret and every user's keys. Move key custody to clawvault first. Tell the user this plainly."
+
+// codeGate is the single authorization point for all code tools: the
+// custody/execution interlock first, then the coder allowlist.
+func (tc *ToolCtx) codeGate() string {
+	if tc.cfg.CodeInterlockTripped() {
+		return codeInterlock
+	}
+	if !tc.isCoder() {
+		return coderOnly
+	}
+	return ""
+}
+
 // resolveWorkspace confines a path to the workspace and REJECTS (not
 // silently rewrites) anything absolute or containing a ".." that climbs out.
 func (tc *ToolCtx) resolveWorkspace(p string) (string, error) {
@@ -40,8 +56,8 @@ func (tc *ToolCtx) resolveWorkspace(p string) (string, error) {
 // capped, rune-safe output. No shell sandboxing beyond the allowlist — this
 // is a trusted-coder tool by design.
 func (tc *ToolCtx) runShell(command string) string {
-	if !tc.isCoder() {
-		return coderOnly
+	if g := tc.codeGate(); g != "" {
+		return g
 	}
 	command = strings.TrimSpace(command)
 	if command == "" {
@@ -68,8 +84,8 @@ func (tc *ToolCtx) runShell(command string) string {
 }
 
 func (tc *ToolCtx) writeWorkspaceFile(path, content string) string {
-	if !tc.isCoder() {
-		return coderOnly
+	if g := tc.codeGate(); g != "" {
+		return g
 	}
 	full, err := tc.resolveWorkspace(path)
 	if err != nil {
@@ -85,8 +101,8 @@ func (tc *ToolCtx) writeWorkspaceFile(path, content string) string {
 }
 
 func (tc *ToolCtx) readWorkspaceFile(path string) string {
-	if !tc.isCoder() {
-		return coderOnly
+	if g := tc.codeGate(); g != "" {
+		return g
 	}
 	full, err := tc.resolveWorkspace(path)
 	if err != nil {

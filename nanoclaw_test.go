@@ -341,6 +341,21 @@ func TestCodeCapabilityGating(t *testing.T) {
 		}
 	}
 
+	// interlock: with wallet keys held in-process, code is off entirely
+	locked := *cfg
+	locked.Secret = "in-process-secret"
+	if locked.CodeEnabled() {
+		t.Fatal("code must be disabled while NANOCLAW_SECRET is held in-process")
+	}
+	for _, d := range toolDefs(&locked) {
+		if d.Function.Name == "shell" {
+			t.Fatal("shell must not be offered when the custody interlock is tripped")
+		}
+	}
+	if out := (&ToolCtx{cfg: &locked, authorID: "dev"}).runShell("echo hi"); !strings.Contains(out, "SEPARATE processes") {
+		t.Fatalf("interlock should refuse shell even for a coder: %s", out)
+	}
+
 	coder := &ToolCtx{cfg: cfg, authorID: "dev"}
 	rando := &ToolCtx{cfg: cfg, authorID: "rando"}
 

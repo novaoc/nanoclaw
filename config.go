@@ -15,6 +15,22 @@ func atoiOr(s string, def int) int {
 	return def
 }
 
+// CodeEnabled reports whether the shell/file tools may run. It enforces the
+// custody/execution split: code is NOT available while THIS process holds
+// wallet-key material (NANOCLAW_SECRET), because a shell in the same process
+// could read the secret and every connected user's keys and exfiltrate them.
+// To have both a coder shell AND wallets, move key custody into clawvault (a
+// separate process/user) so this one never holds the secret. See CLAWVAULT.md.
+func (c *Config) CodeEnabled() bool {
+	return len(c.Coders) > 0 && c.Secret == ""
+}
+
+// CodeInterlockTripped is true when a misconfig asks for BOTH code and
+// in-process keys — code is refused and startup logs why.
+func (c *Config) CodeInterlockTripped() bool {
+	return len(c.Coders) > 0 && c.Secret != ""
+}
+
 type Config struct {
 	DiscordToken  string
 	DeepseekKey   string

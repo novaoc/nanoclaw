@@ -25,6 +25,11 @@ func main() {
 		log.Fatalf("data dir: %v", err)
 	}
 	SetupGit(cfg) // authenticate git pushes as Vela when GITHUB_TOKEN is set
+	if cfg.CodeInterlockTripped() {
+		log.Printf("SECURITY: NANOCLAW_CODERS is set while this process holds NANOCLAW_SECRET — " +
+			"code/shell is DISABLED (a shell could read the wallet secret + keys). Move custody to " +
+			"clawvault to run both safely. See CLAWVAULT.md.")
+	}
 
 	agent := NewAgent(cfg)
 	bot, err := NewBot(cfg, agent)

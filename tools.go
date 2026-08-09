@@ -20,7 +20,8 @@ import (
 type ToolCtx struct {
 	cfg       *Config
 	bankr     *Bankr
-	authorID  string   // Discord user id of the requester (for admin gating)
+	keys      *KeyStore
+	authorID  string   // Discord user id of the requester — picks their wallet
 	Artifacts []string // file paths saved this turn
 }
 
@@ -47,13 +48,12 @@ func toolDefs(cfg *Config) []ToolDef {
 			"Append a durable note to long-term memory (survives reboots, shared across all channels). Use for server preferences, ongoing projects, decisions.",
 			`{"type":"object","properties":{"note":{"type":"string"}},"required":["note"]}`),
 	}
-	if cfg.BankrKey != "" {
+	if cfg.Secret != "" {
 		defs = append(defs, mk("bankr",
-			"Bankr wallet + token agent (Base). Natural-language: create a wallet, check balances/portfolio/prices, launch a token, or trade (send/swap/buy/sell). "+
-				"READS (balances, prices, portfolio, fees, token info) run for anyone. "+
-				"WRITES that move funds or deploy (create wallet, launch, send, swap, buy, sell, claim) require confirm:true AND an authorized user — "+
-				"ALWAYS show the exact action and wait for the human's explicit 'yes' before setting confirm:true; deploys and trades are irreversible.",
-			`{"type":"object","properties":{"prompt":{"type":"string","description":"natural-language instruction for the Bankr agent"},"confirm":{"type":"boolean","description":"set true ONLY after the human explicitly approved this specific fund-moving action"}},"required":["prompt"]}`))
+			"Bankr wallet + token agent (Base), acting on THE REQUESTER'S OWN connected wallet. Check balances/portfolio/prices, launch a token, or trade (send/swap/buy/sell). "+
+				"Only works for a user who has connected their own Bankr key via /connect — you act only on their wallet, never anyone else's. "+
+				"WRITES that move funds or deploy (launch, send, swap, buy, sell, claim) require confirm:true — ALWAYS show the exact action (amounts, token, recipient, that it's irreversible) and wait for the human's explicit 'yes' before setting confirm:true.",
+			`{"type":"object","properties":{"prompt":{"type":"string","description":"natural-language instruction for the requester's Bankr wallet"},"confirm":{"type":"boolean","description":"set true ONLY after the human explicitly approved this specific fund-moving action"}},"required":["prompt"]}`))
 	}
 	return defs
 }
@@ -81,29 +81,27 @@ func (tc *ToolCtx) Run(name, args string) string {
 	return "tool error: unknown tool " + name
 }
 
-// runBankr enforces the money guardrails BEFORE any request leaves the box:
-// fund-moving / deploy prompts need an authorized Discord user and an
-// explicit confirm flag. Reads are open. The prompt tells Vela to get a
-// human "yes" first; this is the hard backstop under that.
+// runBankr acts ONLY on the requester's own connected wallet. No connected
+// key → no action (never a shared or fallback wallet). Fund-moving / deploy
+// prompts still require an explicit confirm flag on top.
 func (tc *ToolCtx) runBankr(prompt string, confirm bool) string {
-	if tc.bankr == nil {
+	if tc.bankr == nil || tc.keys == nil || !tc.keys.Usable() {
 		return "bankr is not configured on this instance"
 	}
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return "bankr error: empty prompt"
 	}
-	if isBankrWrite(prompt) {
-		if !tc.cfg.BankrAdmins[tc.authorID] {
-			return "REFUSED: this is a fund-moving/deploy action and this user is not on the Bankr admin allowlist. " +
-				"Tell them only an authorized admin can execute wallet creation, launches, or trades. Reads (balances, prices, portfolio) are fine for anyone."
-		}
-		if !confirm {
-			return "HOLD: confirmation required. Show the human the EXACT action (amounts, token, recipient, that it is irreversible) " +
-				"and only call bankr again with confirm:true after they reply with an explicit yes."
-		}
+	key, ok := tc.keys.Get(tc.authorID)
+	if !ok {
+		return "NOT CONNECTED: this user has no wallet connected. Tell them to run /connect and paste their own Bankr API key " +
+			"(from bankr.bot/api, wallet access enabled) — it's private and encrypted, and you'll only ever act on their own wallet."
 	}
-	out, err := tc.bankr.Prompt(prompt)
+	if isBankrWrite(prompt) && !confirm {
+		return "HOLD: confirmation required. Show the human the EXACT action (amounts, token, recipient, that it is irreversible) " +
+			"and only call bankr again with confirm:true after they reply with an explicit yes."
+	}
+	out, err := tc.bankr.Prompt(key, prompt)
 	if err != nil {
 		return "bankr error: " + err.Error()
 	}

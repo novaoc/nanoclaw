@@ -85,22 +85,39 @@ fraction of the cost.
 
 ### Tokens & wallet (Bankr)
 
-Optional. Set `BANKR_API_KEY` ([bankr.bot/api](https://bankr.bot/api), wallet
-access enabled) and Vela can design tokens and run a real wallet on Base
-through [Bankr](https://bankr.bot) — Bankr owns the wallet, signs, and executes
-on-chain; nanoclaw never touches keys.
+Optional. Set `NANOCLAW_SECRET` and Vela can design tokens (no key needed) and
+run **per-user wallets** on Base through [Bankr](https://bankr.bot) — Bankr owns
+the wallet, signs, and executes; nanoclaw never touches private keys.
 
-> **@nanoclaw** what's my Bankr portfolio worth?  ← read, anyone
-> **@nanoclaw** review my token idea: a coin for indie TCG shops  ← strategy
-> **@nanoclaw** create a wallet and launch $SHELF  ← write, admin only
+**Each person connects their own wallet.** `/connect api_key:bk_…` (from
+[bankr.bot/api](https://bankr.bot/api), wallet access enabled) — the command
+and its reply are **ephemeral**, so only that user ever sees them. Vela then
+acts *only* on that person's wallet, recognized by their Discord id; nobody can
+touch anyone else's funds. `/disconnect` wipes your key.
 
-**Money guardrails:** reads (balances, prices, portfolio, fees) are open to
-anyone. Writes that move funds or deploy — create wallet, launch, send, swap,
-buy, sell, claim — require (1) a Discord user ID in `BANKR_ADMINS` and (2) an
-explicit confirmation after Vela shows the exact, irreversible action. Both
-gates are enforced in code, not just the prompt. Leave `BANKR_ADMINS` blank
-and it's reads-only. Token strategy follows the five-forces method from
-Bankr's [token-strategist](https://github.com/BankrBot/token-strategist).
+> **/connect** api_key: bk_…                          ← private, one time
+> **@nanoclaw** what's my portfolio worth?            ← your wallet
+> **@nanoclaw** review my token idea for indie shops  ← strategy, no wallet
+> **@nanoclaw** launch $SHELF and buy $50 of it       ← your wallet, confirmed
+
+**Custody & guardrails:**
+- Connected keys are **AES-GCM encrypted at rest** under `NANOCLAW_SECRET`.
+  Keep that secret *off the microSD* (see the env file) and a stolen card
+  can't decrypt anything. No secret set → the whole wallet feature is off and
+  no keys are ever stored.
+- Vela acts only on the requester's own connected wallet — no shared wallet,
+  no borrowing someone else's.
+- Fund-moving/deploy actions (launch, send, swap, buy, sell, claim) need an
+  explicit confirmation after Vela shows the exact, irreversible action —
+  enforced in code, not just the prompt.
+- Honest limit: a bot that spends autonomously must be able to decrypt keys at
+  runtime, so anyone with live *root on the running box* is outside what
+  encryption can stop. This protects against a lost/stolen card and casual
+  file access, not a determined operator dumping process memory.
+
+Token strategy follows the five-forces method from Bankr's
+[token-strategist](https://github.com/BankrBot/token-strategist); the wallet
+API is [bankr-api-examples](https://github.com/BankrBot/bankr-api-examples).
 
 ### Mentions — quick turns
 

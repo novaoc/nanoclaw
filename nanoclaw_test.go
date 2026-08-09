@@ -184,37 +184,84 @@ func TestBankrWriteIntent(t *testing.T) {
 	}
 }
 
-func TestBankrGating(t *testing.T) {
+func TestBankrPerUserGating(t *testing.T) {
 	cfg := testCfg(t)
-	cfg.BankrKey = "bk_test" // enable, but no real client calls in these paths
-	cfg.BankrAdmins = map[string]bool{"admin-id": true}
+	cfg.Secret = "test-server-secret" // enables key custody + the tool
 
-	// the tool is only offered when a key is present
+	// the tool is only offered when custody is enabled
 	names := map[string]bool{}
 	for _, d := range toolDefs(cfg) {
 		names[d.Function.Name] = true
 	}
 	if !names["bankr"] {
-		t.Fatal("bankr tool should be offered when a key is set")
+		t.Fatal("bankr tool should be offered when NANOCLAW_SECRET is set")
 	}
-	if toolDefs(&Config{})[0].Function.Name == "bankr" {
-		t.Fatal("bankr tool must NOT appear without a key")
+	for _, d := range toolDefs(&Config{}) {
+		if d.Function.Name == "bankr" {
+			t.Fatal("bankr tool must NOT appear without custody enabled")
+		}
 	}
 
-	newTC := func(uid string) *ToolCtx { return &ToolCtx{cfg: cfg, bankr: NewBankr(cfg), authorID: uid} }
+	ks := NewKeyStore(cfg)
+	newTC := func(uid string) *ToolCtx {
+		return &ToolCtx{cfg: cfg, bankr: NewBankr(cfg), keys: ks, authorID: uid}
+	}
 
-	// non-admin write → refused, never reaches the network
-	if out := newTC("rando").runBankr("send 1 ETH to 0xabc", false); !strings.Contains(out, "REFUSED") {
-		t.Fatalf("non-admin write should be refused, got: %s", out)
+	// a user with NO connected wallet → NOT CONNECTED, never hits the network
+	if out := newTC("nobody").runBankr("what are my balances?", false); !strings.Contains(out, "NOT CONNECTED") {
+		t.Fatalf("unconnected user should get NOT CONNECTED, got: %s", out)
 	}
-	// admin write without confirm → held for confirmation
-	if out := newTC("admin-id").runBankr("launch a token called VELA", false); !strings.Contains(out, "HOLD") {
-		t.Fatalf("admin write w/o confirm should hold, got: %s", out)
+	// connect a user, then a WRITE without confirm → HOLD
+	if err := ks.Put("alice", "bk_alicealicealice"); err != nil {
+		t.Fatal(err)
 	}
-	// non-admin READ is allowed to proceed (fails only at the network, which
-	// proves it passed the gate) — must NOT be a policy refusal
-	if out := newTC("rando").runBankr("what are my balances?", false); strings.Contains(out, "REFUSED") || strings.Contains(out, "HOLD") {
-		t.Fatalf("read should pass the gate, got: %s", out)
+	if out := newTC("alice").runBankr("send 1 ETH to 0xabc", false); !strings.Contains(out, "HOLD") {
+		t.Fatalf("connected write w/o confirm should hold, got: %s", out)
+	}
+	// alice's READ passes the gate (fails only at the fake network) — not a policy block
+	if out := newTC("alice").runBankr("what are my balances?", false); strings.Contains(out, "NOT CONNECTED") || strings.Contains(out, "HOLD") {
+		t.Fatalf("connected read should pass the gate, got: %s", out)
+	}
+	// bob (unconnected) still can't act even though alice is connected
+	if out := newTC("bob").runBankr("send 1 ETH to 0xabc", true); !strings.Contains(out, "NOT CONNECTED") {
+		t.Fatalf("bob must not borrow alice's wallet, got: %s", out)
+	}
+}
+
+// Keys must be unreadable on disk without the server secret, and bound to
+// their owner's Discord id (AAD) so a swapped file can't impersonate.
+func TestKeyStoreEncryption(t *testing.T) {
+	cfg := testCfg(t)
+	cfg.Secret = "server-secret-A"
+	ks := NewKeyStore(cfg)
+	if err := ks.Put("alice", "bk_supersecretkey123"); err != nil {
+		t.Fatal(err)
+	}
+	// on-disk file is ciphertext — the plaintext key must not appear
+	raw, _ := os.ReadFile(ks.path("alice"))
+	if strings.Contains(string(raw), "bk_supersecretkey123") {
+		t.Fatal("plaintext key leaked to disk")
+	}
+	// round-trips with the right secret
+	if k, ok := ks.Get("alice"); !ok || k != "bk_supersecretkey123" {
+		t.Fatalf("decrypt failed: %q ok=%v", k, ok)
+	}
+	// a DIFFERENT secret cannot decrypt the same file (fresh store, no cache)
+	cfg2 := *cfg
+	cfg2.DataDir = cfg.DataDir // same files
+	cfg2.Secret = "server-secret-B"
+	if k, ok := NewKeyStore(&cfg2).Get("alice"); ok {
+		t.Fatalf("wrong secret decrypted the key: %q", k)
+	}
+	// no secret at all → custody disabled, nothing stored or served
+	cfg3 := *cfg
+	cfg3.Secret = ""
+	if NewKeyStore(&cfg3).Usable() {
+		t.Fatal("keystore should be unusable without a secret")
+	}
+	// delete wipes it
+	if !ks.Delete("alice") || ks.Has("alice") {
+		t.Fatal("delete should remove the key")
 	}
 }
 

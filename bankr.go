@@ -14,18 +14,17 @@ import (
 // GET /agent/job/{id} until terminal. The Bankr agent owns the wallet,
 // execution, and on-chain safety; nanoclaw just relays prompts and reports
 // results. See github.com/BankrBot/bankr-api-examples.
+//
+// The key is per-CALL, not per-client: each user connects their own Bankr
+// key (see keystore.go) and their prompts run against their own wallet.
 
 type Bankr struct {
 	url    string
-	key    string
 	client *http.Client
 }
 
 func NewBankr(cfg *Config) *Bankr {
-	if cfg.BankrKey == "" {
-		return nil
-	}
-	return &Bankr{url: cfg.BankrURL, key: cfg.BankrKey, client: &http.Client{Timeout: 30 * time.Second}}
+	return &Bankr{url: cfg.BankrURL, client: &http.Client{Timeout: 30 * time.Second}}
 }
 
 type bankrJob struct {
@@ -44,12 +43,12 @@ type bankrJob struct {
 	} `json:"statusUpdates"`
 }
 
-func (b *Bankr) do(method, path string, body []byte) (*bankrJob, error) {
+func (b *Bankr) do(key, method, path string, body []byte) (*bankrJob, error) {
 	req, err := http.NewRequest(method, b.url+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("x-api-key", b.key)
+	req.Header.Set("x-api-key", key)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := b.client.Do(req)
 	if err != nil {
@@ -66,12 +65,12 @@ func (b *Bankr) do(method, path string, body []byte) (*bankrJob, error) {
 	return &j, nil
 }
 
-// Prompt submits a natural-language instruction to the Bankr agent and
-// polls to completion, returning the agent's final response plus any
-// transaction summaries.
-func (b *Bankr) Prompt(text string) (string, error) {
+// Prompt submits a natural-language instruction to the Bankr agent using
+// the given user's key, and polls to completion, returning the agent's
+// final response plus any transaction summaries.
+func (b *Bankr) Prompt(key, text string) (string, error) {
 	body, _ := json.Marshal(map[string]string{"prompt": text})
-	job, err := b.do("POST", "/agent/prompt", body)
+	job, err := b.do(key, "POST", "/agent/prompt", body)
 	if err != nil {
 		return "", err
 	}
@@ -80,7 +79,7 @@ func (b *Bankr) Prompt(text string) (string, error) {
 	}
 	for i := 0; i < 60; i++ { // ~90s at 1.5s
 		time.Sleep(1500 * time.Millisecond)
-		st, err := b.do("GET", "/agent/job/"+job.JobID, nil)
+		st, err := b.do(key, "GET", "/agent/job/"+job.JobID, nil)
 		if err != nil {
 			return "", err
 		}

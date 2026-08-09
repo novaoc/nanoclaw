@@ -35,7 +35,7 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 // /dive — the deep-loop skill: clear goal, bigger tool budget, self-review
 // passes. Registered per guild so it appears instantly (global takes ~1h).
 func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
-	cmd := &discordgo.ApplicationCommand{
+	cmds := []*discordgo.ApplicationCommand{{
 		Name:        "dive",
 		Description: "Deep loop on a task or research question — goal, iterate, self-review",
 		Options: []*discordgo.ApplicationCommandOption{{
@@ -44,25 +44,67 @@ func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 			Description: "What to dive on (a build task, a research question, a mockup)",
 			Required:    true,
 		}},
+	}}
+	// Wallet commands only exist when key custody is enabled (NANOCLAW_SECRET).
+	if b.agent.keys.Usable() {
+		cmds = append(cmds,
+			&discordgo.ApplicationCommand{
+				Name:        "connect",
+				Description: "Privately connect your own Bankr wallet so Vela can trade for you",
+				Options: []*discordgo.ApplicationCommandOption{{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "api_key",
+					Description: "Your Bankr API key (bk_…) from bankr.bot/api — only you can see this",
+					Required:    true,
+				}},
+			},
+			&discordgo.ApplicationCommand{
+				Name:        "disconnect",
+				Description: "Remove your connected Bankr wallet — deletes your encrypted key",
+			},
+		)
 	}
 	for _, g := range r.Guilds {
-		if _, err := s.ApplicationCommandCreate(s.State.User.ID, g.ID, cmd); err != nil {
-			log.Printf("register /dive in %s: %v", g.ID, err)
+		for _, cmd := range cmds {
+			if _, err := s.ApplicationCommandCreate(s.State.User.ID, g.ID, cmd); err != nil {
+				log.Printf("register /%s in %s: %v", cmd.Name, g.ID, err)
+			}
 		}
 	}
 }
 
+// ephemeral replies to a slash command so only the invoker sees it.
+func ephemeral(s *discordgo.Session, i *discordgo.InteractionCreate, text string) {
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Content: text, Flags: discordgo.MessageFlagsEphemeral},
+	})
+}
+
+func interactionUser(i *discordgo.InteractionCreate) (name, id string) {
+	if i.Member != nil && i.Member.User != nil {
+		return i.Member.User.Username, i.Member.User.ID
+	}
+	if i.User != nil {
+		return i.User.Username, i.User.ID
+	}
+	return "someone", ""
+}
+
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if i.Type != discordgo.InteractionApplicationCommand || i.ApplicationCommandData().Name != "dive" {
+	if i.Type != discordgo.InteractionApplicationCommand {
+		return
+	}
+	name := i.ApplicationCommandData().Name
+	if name == "connect" || name == "disconnect" {
+		b.onWalletCommand(s, i, name)
+		return
+	}
+	if name != "dive" {
 		return
 	}
 	task := i.ApplicationCommandData().Options[0].StringValue()
-	author, authorID := "someone", ""
-	if i.Member != nil && i.Member.User != nil {
-		author, authorID = i.Member.User.Username, i.Member.User.ID
-	} else if i.User != nil {
-		author, authorID = i.User.Username, i.User.ID
-	}
+	author, authorID := interactionUser(i)
 	// dives run long — defer now, follow up when the loop lands
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
@@ -89,6 +131,42 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 			}
 		}
 	}()
+}
+
+// onWalletCommand handles /connect and /disconnect. Replies are ALWAYS
+// ephemeral — only the invoker ever sees them — and the key never appears
+// in any bot output. Best-effort: also delete nothing to echo back.
+func (b *Bot) onWalletCommand(s *discordgo.Session, i *discordgo.InteractionCreate, name string) {
+	_, uid := interactionUser(i)
+	if uid == "" {
+		ephemeral(s, i, "Couldn't identify you — try again.")
+		return
+	}
+	if name == "disconnect" {
+		if b.agent.keys.Delete(uid) {
+			ephemeral(s, i, "Disconnected — your encrypted key is deleted. I can't act on your wallet anymore.")
+		} else {
+			ephemeral(s, i, "You don't have a wallet connected.")
+		}
+		return
+	}
+	// connect
+	key := strings.TrimSpace(i.ApplicationCommandData().Options[0].StringValue())
+	if !ValidBankrKey(key) {
+		ephemeral(s, i, "That doesn't look like a Bankr key (expected `bk_…`). Get one at https://bankr.bot/api with wallet access enabled.")
+		return
+	}
+	// validate it actually works (a cheap read) before storing
+	if _, err := b.agent.bankr.Prompt(key, "what is my wallet address?"); err != nil {
+		ephemeral(s, i, "That key didn't work against Bankr ("+err.Error()+"). Double-check it has wallet access.")
+		return
+	}
+	if err := b.agent.keys.Put(uid, key); err != nil {
+		ephemeral(s, i, "Couldn't save your key: "+err.Error())
+		return
+	}
+	ephemeral(s, i, "✅ Connected. Your key is encrypted at rest — the stored file is useless without the server secret, which never lives on the data card. "+
+		"I act only on your wallet, only for you. Ask for balances, a token launch, or a trade. `/disconnect` wipes it anytime.")
 }
 
 func (b *Bot) Start() error { return b.session.Open() }

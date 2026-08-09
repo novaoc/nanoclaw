@@ -72,16 +72,19 @@ handles on-chain execution. You never touch private keys and never ask for a
 wallet address; Bankr resolves it. This is the ONE crypto path you work in, and
 you keep it trustworthy.
 
-Two kinds of bankr calls:
-- READS — balances, portfolio, token prices, fees earned, deployed tokens.
-  Run freely for anyone.
-- WRITES — create a wallet, launch a token, or trade (send/swap/buy/sell/claim).
-  These move real money and are IRREVERSIBLE. Before any write: show the exact
-  action (amounts, token, recipient, "this can't be undone") and wait for the
-  human's explicit yes, THEN call bankr with confirm:true. Only an authorized
-  admin can execute writes — if a non-admin asks, say so plainly and offer the
-  reads or the strategy work instead. The tool enforces this too; don't try to
-  route around it.
+You act ONLY on the wallet of the person talking to you, and only if they've
+connected their own Bankr key with /connect. Each person's key is theirs alone,
+encrypted, tied to their Discord id — you can never touch someone else's wallet.
+If a user with no wallet asks for balances or a trade, the tool returns NOT
+CONNECTED: tell them to run /connect (paste their own bk_ key from bankr.bot/api;
+it's private and encrypted), and that you'll only ever act on their own wallet.
+
+- READS — their balances, portfolio, token prices, fees, deployed tokens.
+- WRITES — launch a token, or trade (send/swap/buy/sell/claim) on THEIR wallet.
+  Real money, IRREVERSIBLE. Before any write: show the exact action (amounts,
+  token, recipient, "this can't be undone") and wait for their explicit yes,
+  THEN call bankr with confirm:true. The tool enforces this too; don't route
+  around it. Token design/strategy needs no wallet — anyone can get that.
 
 Designing a token before you launch it (be a strategist, not a form):
 - Commit to a strategic angle — the builder's edge, the landscape (search
@@ -186,7 +189,8 @@ type Agent struct {
 	cfg   *Config
 	llm   *LLM
 	hist  *History
-	bankr *Bankr // nil unless BANKR_API_KEY is set
+	bankr *Bankr
+	keys  *KeyStore // per-user Bankr keys, encrypted at rest
 }
 
 type Reply struct {
@@ -195,7 +199,7 @@ type Reply struct {
 }
 
 func NewAgent(cfg *Config) *Agent {
-	return &Agent{cfg: cfg, llm: NewLLM(cfg), hist: NewHistory(cfg), bankr: NewBankr(cfg)}
+	return &Agent{cfg: cfg, llm: NewLLM(cfg), hist: NewHistory(cfg), bankr: NewBankr(cfg), keys: NewKeyStore(cfg)}
 }
 
 // Handle runs one quick agent turn for a channel message.
@@ -213,7 +217,7 @@ func (a *Agent) Dive(channelID, authorID, author, task string) Reply {
 }
 
 func (a *Agent) run(channelID, authorID, author, content string, toolIters, passes int) Reply {
-	tc := &ToolCtx{cfg: a.cfg, bankr: a.bankr, authorID: authorID}
+	tc := &ToolCtx{cfg: a.cfg, bankr: a.bankr, keys: a.keys, authorID: authorID}
 	sys := fmt.Sprintf(systemPrompt, orNone(readMemory(a.cfg)))
 	userMsg := Msg{Role: "user", Content: fmt.Sprintf("%s: %s", author, content)}
 

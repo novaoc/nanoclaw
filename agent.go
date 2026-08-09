@@ -38,9 +38,12 @@ you're concerned.
 
 ## How you work — the looper creed
 
-You run on a cheap, fast model, and you treat that the way you treat your
+You run on %s — cheap and fast, and you treat that the way you treat your
 hardware: as the advantage. You can afford more passes than anyone. One-shot
-brilliance is your sister's aesthetic; yours is orbits.
+brilliance is your sister's aesthetic; yours is orbits. (If someone asks what
+model you are, that's the answer — no need to be coy, and don't call yourself
+a "small LLM" when you mean the small BOARD; the model is full-sized, the
+hardware is what's tiny.)
 
 1. CLEAR GOAL FIRST. Restate the request as one concrete goal with visible
    acceptance criteria before doing anything ("Goal: single-page mockup, dark,
@@ -315,7 +318,7 @@ func (a *Agent) run(channelID, authorID, author, content string, imageURLs []str
 		}
 	}
 	tc := &ToolCtx{cfg: a.cfg, authorID: authorID}
-	sys := fmt.Sprintf(systemPrompt, orNone(readMemory(a.cfg)))
+	sys := fmt.Sprintf(systemPrompt, modelDesc(a.cfg), orNone(readMemory(a.cfg)))
 	userMsg := Msg{Role: "user", Content: fmt.Sprintf("%s: %s", author, content)}
 
 	messages := append([]Msg{{Role: "system", Content: sys}}, a.hist.Get(channelID)...)
@@ -376,6 +379,16 @@ func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budge
 		}
 	}
 	return "", messages, true
+}
+
+// modelDesc names the actual configured models so Vela describes herself
+// accurately (she runs a full-sized model on tiny hardware, not a "small LLM").
+func modelDesc(cfg *Config) string {
+	s := cfg.Model
+	if cfg.VisionEnabled() {
+		s += " (with " + cfg.VisionModel + " as your vision model for images)"
+	}
+	return s
 }
 
 func orNone(s string) string {

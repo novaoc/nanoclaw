@@ -19,7 +19,9 @@ var memMu sync.Mutex
 func memoryPath(cfg *Config) string { return filepath.Join(cfg.DataDir, "MEMORY.md") }
 
 func readMemory(cfg *Config) string {
+	memMu.Lock()
 	b, err := os.ReadFile(memoryPath(cfg))
+	memMu.Unlock()
 	if err != nil {
 		return ""
 	}

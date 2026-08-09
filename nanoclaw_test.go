@@ -2,12 +2,23 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+func mustIP(t *testing.T, s string) net.IP {
+	t.Helper()
+	ip := net.ParseIP(s)
+	if ip == nil {
+		t.Fatalf("bad ip %q", s)
+	}
+	return ip
+}
 
 func testCfg(t *testing.T) *Config {
 	t.Helper()
@@ -165,21 +176,27 @@ func TestDDGParsing(t *testing.T) {
 	}
 }
 
-// The money guardrails run BEFORE any request leaves the box — verify the
-// tool layer itself gates, independent of what the prompt says.
-func TestBankrWriteIntent(t *testing.T) {
-	writes := []string{"send 0.1 ETH to vitalik.eth", "launch a token called VELA",
-		"create a wallet", "swap 100 USDC for ETH", "buy $50 of DEGEN", "claim my fees"}
+// Read classification is fail-CLOSED: only clear look-ups run without a
+// confirm. Verb-denylist misses ("yeet", "move", "pay", "convert") must NOT
+// be treated as reads.
+func TestWalletReadClassification(t *testing.T) {
 	reads := []string{"what are my balances?", "show my portfolio", "price of ETH",
-		"how much fees have I earned?", "list my deployed tokens"}
-	for _, w := range writes {
-		if !isBankrWrite(w) {
-			t.Errorf("should be a WRITE: %q", w)
+		"how much are my fees?", "list my deployed tokens", "what's my wallet address?"}
+	writes := []string{"send 0.1 ETH to vitalik.eth", "launch a token called VELA",
+		"swap 100 USDC for ETH", "buy $50 of DEGEN", "claim my fees",
+		// the denylist-evaders from the review:
+		"yeet all my ETH to 0xabc", "move everything to my cold wallet",
+		"pay alice 20 USDC", "convert my DEGEN to ETH", "liquidate my position",
+		// no recognizable read intent at all → fail closed to write
+		"do the thing with my coins"}
+	for _, r := range reads {
+		if !isWalletRead(r) {
+			t.Errorf("should be a READ: %q", r)
 		}
 	}
-	for _, r := range reads {
-		if isBankrWrite(r) {
-			t.Errorf("should be a READ: %q", r)
+	for _, w := range writes {
+		if isWalletRead(w) {
+			t.Errorf("should NOT be a read (fail closed): %q", w)
 		}
 	}
 }
@@ -203,28 +220,65 @@ func TestBankrPerUserGating(t *testing.T) {
 	}
 
 	ks := NewKeyStore(cfg)
+	confirms := NewConfirmations()
 	newTC := func(uid string) *ToolCtx {
-		return &ToolCtx{cfg: cfg, bankr: NewBankr(cfg), keys: ks, authorID: uid}
+		return &ToolCtx{cfg: cfg, bankr: NewBankr(cfg), keys: ks, confirms: confirms, authorID: uid}
 	}
 
 	// a user with NO connected wallet → NOT CONNECTED, never hits the network
-	if out := newTC("nobody").runBankr("what are my balances?", false); !strings.Contains(out, "NOT CONNECTED") {
+	if out := newTC("nobody").runBankr("what are my balances?"); !strings.Contains(out, "NOT CONNECTED") {
 		t.Fatalf("unconnected user should get NOT CONNECTED, got: %s", out)
 	}
-	// connect a user, then a WRITE without confirm → HOLD
+	// connect a user, then a WRITE → QUEUED for a button, and a Pending set
 	if err := ks.Put("alice", "bk_alicealicealice"); err != nil {
 		t.Fatal(err)
 	}
-	if out := newTC("alice").runBankr("send 1 ETH to 0xabc", false); !strings.Contains(out, "HOLD") {
-		t.Fatalf("connected write w/o confirm should hold, got: %s", out)
+	tc := newTC("alice")
+	if out := tc.runBankr("send 1 ETH to 0xabc"); !strings.Contains(out, "QUEUED") {
+		t.Fatalf("connected write should queue a confirmation, got: %s", out)
 	}
-	// alice's READ passes the gate (fails only at the fake network) — not a policy block
-	if out := newTC("alice").runBankr("what are my balances?", false); strings.Contains(out, "NOT CONNECTED") || strings.Contains(out, "HOLD") {
-		t.Fatalf("connected read should pass the gate, got: %s", out)
+	if tc.Pending == nil || tc.Pending.UID != "alice" {
+		t.Fatalf("write should stage a pending action for the requester")
+	}
+	// the model can't approve it; only the owner's button click can.
+	if _, err := confirms.Take(tc.Pending.Token, "mallory"); err != errConfirmNotYours {
+		t.Fatalf("only the requester may confirm, got: %v", err)
+	}
+	if _, err := confirms.Take(tc.Pending.Token, "alice"); err != nil {
+		t.Fatalf("requester should be able to take their own action: %v", err)
+	}
+	// alice's READ passes the gate (fails only at the fake network) — no queue
+	tc2 := newTC("alice")
+	if out := tc2.runBankr("what are my balances?"); strings.Contains(out, "NOT CONNECTED") || strings.Contains(out, "QUEUED") {
+		t.Fatalf("connected read should execute, got: %s", out)
+	}
+	if tc2.Pending != nil {
+		t.Fatal("a read must not stage a pending action")
 	}
 	// bob (unconnected) still can't act even though alice is connected
-	if out := newTC("bob").runBankr("send 1 ETH to 0xabc", true); !strings.Contains(out, "NOT CONNECTED") {
+	if out := newTC("bob").runBankr("send 1 ETH to 0xabc"); !strings.Contains(out, "NOT CONNECTED") {
 		t.Fatalf("bob must not borrow alice's wallet, got: %s", out)
+	}
+}
+
+// The out-of-band confirmation is what actually authorizes a transaction.
+func TestConfirmationOwnerOnly(t *testing.T) {
+	c := NewConfirmations()
+	pa := c.Add("alice", "send 1 ETH to 0xabc")
+	// wrong user can't consume or cancel, and the action survives for the owner
+	if _, err := c.Take(pa.Token, "eve"); err != errConfirmNotYours {
+		t.Fatalf("wrong clicker should be rejected, got %v", err)
+	}
+	if err := c.Cancel(pa.Token, "eve"); err != errConfirmNotYours {
+		t.Fatalf("wrong clicker cancel should be rejected, got %v", err)
+	}
+	got, err := c.Take(pa.Token, "alice")
+	if err != nil || got.Prompt != "send 1 ETH to 0xabc" {
+		t.Fatalf("owner take failed: %v %+v", err, got)
+	}
+	// one-shot: a second take fails
+	if _, err := c.Take(pa.Token, "alice"); err != errConfirmExpired {
+		t.Fatalf("token should be single-use, got %v", err)
 	}
 }
 
@@ -262,6 +316,37 @@ func TestKeyStoreEncryption(t *testing.T) {
 	// delete wipes it
 	if !ks.Delete("alice") || ks.Has("alice") {
 		t.Fatal("delete should remove the key")
+	}
+}
+
+func TestSSRFBlocking(t *testing.T) {
+	blocked := []string{"127.0.0.1", "10.0.0.5", "192.168.1.1", "172.16.0.1",
+		"169.254.1.1", "0.0.0.0", "100.100.0.1", "::1", "fe80::1"}
+	for _, s := range blocked {
+		if !blockedIP(mustIP(t, s)) {
+			t.Errorf("should be blocked: %s", s)
+		}
+	}
+	allowed := []string{"8.8.8.8", "1.1.1.1", "93.184.216.34", "2606:2800:220:1::1"}
+	for _, s := range allowed {
+		if blockedIP(mustIP(t, s)) {
+			t.Errorf("should be allowed: %s", s)
+		}
+	}
+	// fetch_url must reject a literal private host before dialing
+	if out := fetchURL("http://169.254.169.254/latest/meta-data/"); !strings.Contains(out, "error") {
+		t.Fatalf("SSRF to link-local should error, got: %s", out)
+	}
+}
+
+func TestClipRuneSafe(t *testing.T) {
+	s := strings.Repeat("é", 100) // 2 bytes each
+	out := clip(s, 5)             // 5 bytes lands mid-rune
+	if !utf8.ValidString(strings.TrimSuffix(out, " …[truncated]")) {
+		t.Fatalf("clip split a rune: %q", out)
+	}
+	if clip("short", 100) != "short" {
+		t.Fatal("clip should pass short strings through")
 	}
 }
 

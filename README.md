@@ -101,15 +101,26 @@ touch anyone else's funds. `/disconnect` wipes your key.
 > **@nanoclaw** launch $SHELF and buy $50 of it       ← your wallet, confirmed
 
 **Custody & guardrails:**
-- Connected keys are **AES-GCM encrypted at rest** under `NANOCLAW_SECRET`.
-  Keep that secret *off the microSD* (see the env file) and a stolen card
-  can't decrypt anything. No secret set → the whole wallet feature is off and
-  no keys are ever stored.
+- Connected keys are **AES-GCM encrypted at rest** under `NANOCLAW_SECRET`
+  (Discord id as AAD, so a swapped key file can't impersonate another owner).
+  Generate the secret on the box with `deploy/gen-secret.sh` — it writes a
+  random 256-bit value to a root-600 file that's never printed or committed.
+  Keep that file *off the microSD* and a stolen card can't decrypt anything.
+  No secret → the whole wallet feature is off and no keys are ever stored.
 - Vela acts only on the requester's own connected wallet — no shared wallet,
   no borrowing someone else's.
-- Fund-moving/deploy actions (launch, send, swap, buy, sell, claim) need an
-  explicit confirmation after Vela shows the exact, irreversible action —
-  enforced in code, not just the prompt.
+- **Confirmation is out-of-band, not model-controlled.** A fund-moving or
+  deploy request never executes from chat — it queues and the requester gets
+  a **Confirm button**. Only their click (verified against their Discord id,
+  in Go) runs the transaction. So a prompt-injected web page fetched via a
+  tool can't trigger a spend: it can put text in the model's context, but it
+  can't click a button as the user.
+- Read vs. write is **fail-closed**: only clear look-ups (balance, portfolio,
+  price…) run without a click; anything ambiguous ("move", "pay", "yeet")
+  routes to the button.
+- **SSRF-guarded fetches**: the web tools refuse private/loopback/link-local
+  addresses and re-check after every redirect, so a public URL can't bounce
+  the bot into your LAN.
 - Honest limit: a bot that spends autonomously must be able to decrypt keys at
   runtime, so anyone with live *root on the running box* is outside what
   encryption can stop. This protects against a lost/stolen card and casual

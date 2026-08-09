@@ -104,11 +104,18 @@ func formatJob(j *bankrJob) string {
 	return strings.TrimSpace(b.String())
 }
 
-// writeIntent flags prompts that would move funds or deploy — those need an
-// admin + confirmation. Reads (balances, prices, fees, portfolio) don't.
-var writeVerb = regexp.MustCompile(`(?i)\b(send|transfer|swap|buy|sell|trade|bridge|withdraw|deposit|approve|claim|launch|deploy|mint|stake|unstake|wrap|unwrap|create\s+(a\s+)?wallet|new\s+wallet|login|register)\b`)
+// isWalletRead is a fail-CLOSED allowlist: only prompts that clearly just
+// look something up execute without confirmation. A verb DENYlist would miss
+// "yeet my ETH to 0x…", "move", "pay", "convert" — so anything not matching
+// here is treated as fund-moving and routed to the out-of-band confirmation.
+var readIntent = regexp.MustCompile(`(?i)\b(balance|balances|portfolio|holding|holdings|price|prices|worth|value|fee|fees|address|history|transactions?|status|how\s+much|show|list|view|check)\b`)
 
-func isBankrWrite(prompt string) bool { return writeVerb.MatchString(prompt) }
+// a read phrasing that ALSO carries a move verb is NOT a read.
+var moveVerb = regexp.MustCompile(`(?i)\b(send|transfer|swap|buy|sell|trade|bridge|withdraw|deposit|pay|move|convert|liquidate|approve|claim|launch|deploy|mint|stake|unstake|wrap|unwrap|yeet|ape)\b`)
+
+func isWalletRead(prompt string) bool {
+	return readIntent.MatchString(prompt) && !moveVerb.MatchString(prompt)
+}
 
 func orDefault(s, def string) string {
 	if strings.TrimSpace(s) == "" {

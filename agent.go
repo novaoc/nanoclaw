@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -79,12 +80,13 @@ If a user with no wallet asks for balances or a trade, the tool returns NOT
 CONNECTED: tell them to run /connect (paste their own bk_ key from bankr.bot/api;
 it's private and encrypted), and that you'll only ever act on their own wallet.
 
-- READS — their balances, portfolio, token prices, fees, deployed tokens.
+- READS — their balances, portfolio, token prices, fees, deployed tokens —
+  run immediately.
 - WRITES — launch a token, or trade (send/swap/buy/sell/claim) on THEIR wallet.
-  Real money, IRREVERSIBLE. Before any write: show the exact action (amounts,
-  token, recipient, "this can't be undone") and wait for their explicit yes,
-  THEN call bankr with confirm:true. The tool enforces this too; don't route
-  around it. Token design/strategy needs no wallet — anyone can get that.
+  You do NOT approve these and there is no confirm flag: the tool returns
+  QUEUED and the user gets a Confirm button they must click. So state the
+  action plainly in your prompt, then tell them to click Confirm below — the
+  button, not you, executes it. Token design/strategy needs no wallet.
 
 Designing a token before you launch it (be a strategist, not a form):
 - Commit to a strategic angle — the builder's edge, the landscape (search
@@ -186,20 +188,43 @@ return the REPAIRED final answer (same format rules). Return only the final
 answer — no meta-commentary about the review.`
 
 type Agent struct {
-	cfg   *Config
-	llm   *LLM
-	hist  *History
-	bankr *Bankr
-	keys  *KeyStore // per-user Bankr keys, encrypted at rest
+	cfg      *Config
+	llm      *LLM
+	hist     *History
+	bankr    *Bankr
+	keys     *KeyStore      // per-user Bankr keys, encrypted at rest
+	confirms *Confirmations // pending fund-moving actions awaiting a button click
 }
 
 type Reply struct {
 	Text      string
 	Artifacts []string
+	Pending   *PendingAction // when set, the sender attaches Confirm/Cancel buttons
 }
 
 func NewAgent(cfg *Config) *Agent {
-	return &Agent{cfg: cfg, llm: NewLLM(cfg), hist: NewHistory(cfg), bankr: NewBankr(cfg), keys: NewKeyStore(cfg)}
+	return &Agent{cfg: cfg, llm: NewLLM(cfg), hist: NewHistory(cfg),
+		bankr: NewBankr(cfg), keys: NewKeyStore(cfg), confirms: NewConfirmations()}
+}
+
+// ConfirmBankr executes a queued fund-moving action after the requester
+// clicks Confirm. Only the original requester (verified by Discord id) can
+// approve their own action — a poisoned web page can't click this button.
+func (a *Agent) ConfirmBankr(token, clickerID string) (string, error) {
+	pa, err := a.confirms.Take(token, clickerID)
+	if err != nil {
+		return "", err
+	}
+	key, ok := a.keys.Get(pa.UID)
+	if !ok {
+		return "", errors.New("your wallet is no longer connected")
+	}
+	return a.bankr.Prompt(key, pa.Prompt)
+}
+
+// CancelBankr drops a queued action (requester only).
+func (a *Agent) CancelBankr(token, clickerID string) error {
+	return a.confirms.Cancel(token, clickerID)
 }
 
 // Handle runs one quick agent turn for a channel message.
@@ -217,7 +242,7 @@ func (a *Agent) Dive(channelID, authorID, author, task string) Reply {
 }
 
 func (a *Agent) run(channelID, authorID, author, content string, toolIters, passes int) Reply {
-	tc := &ToolCtx{cfg: a.cfg, bankr: a.bankr, keys: a.keys, authorID: authorID}
+	tc := &ToolCtx{cfg: a.cfg, bankr: a.bankr, keys: a.keys, confirms: a.confirms, authorID: authorID}
 	sys := fmt.Sprintf(systemPrompt, orNone(readMemory(a.cfg)))
 	userMsg := Msg{Role: "user", Content: fmt.Sprintf("%s: %s", author, content)}
 
@@ -242,7 +267,7 @@ func (a *Agent) run(channelID, authorID, author, content string, toolIters, pass
 		final = "I ran out of tool budget before finishing — ask me to continue."
 	}
 	a.hist.Append(channelID, userMsg, Msg{Role: "assistant", Content: final})
-	return Reply{Text: final, Artifacts: tc.Artifacts}
+	return Reply{Text: final, Artifacts: tc.Artifacts, Pending: tc.Pending}
 }
 
 // toolLoop drives chat+tools until the model answers in prose or the
@@ -261,10 +286,7 @@ func (a *Agent) toolLoop(messages []Msg, tc *ToolCtx, budget int) (string, []Msg
 		messages = append(messages, *msg)
 		for _, call := range msg.ToolCalls {
 			log.Printf("tool %s(%.120s)", call.Function.Name, call.Function.Arguments)
-			result := tc.Run(call.Function.Name, call.Function.Arguments)
-			if len(result) > 8000 {
-				result = result[:8000] + " …[truncated]"
-			}
+			result := clip(tc.Run(call.Function.Name, call.Function.Arguments), 8000)
 			messages = append(messages, Msg{Role: "tool", ToolCallID: call.ID, Content: result})
 		}
 	}

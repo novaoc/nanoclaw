@@ -122,11 +122,11 @@ func (ks *KeyStore) Has(uid string) bool {
 }
 
 func (ks *KeyStore) Delete(uid string) bool {
-	ks.mu.Lock()
-	delete(ks.cache, uid)
-	ks.mu.Unlock()
 	if ks == nil || !ks.usable {
 		return false
 	}
+	ks.mu.Lock()
+	delete(ks.cache, uid)
+	ks.mu.Unlock()
 	return os.Remove(ks.path(uid)) == nil
 }

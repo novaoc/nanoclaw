@@ -91,7 +91,19 @@ func interactionUser(i *discordgo.InteractionCreate) (name, id string) {
 	return "someone", ""
 }
 
+// confirmButtons builds the Confirm/Cancel row for a pending fund-moving action.
+func confirmButtons(token string) []discordgo.MessageComponent {
+	return []discordgo.MessageComponent{discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+		discordgo.Button{Label: "Confirm", Style: discordgo.SuccessButton, CustomID: "bankr:confirm:" + token},
+		discordgo.Button{Label: "Cancel", Style: discordgo.SecondaryButton, CustomID: "bankr:cancel:" + token},
+	}}}
+}
+
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type == discordgo.InteractionMessageComponent {
+		b.onButton(s, i)
+		return
+	}
 	if i.Type != discordgo.InteractionApplicationCommand {
 		return
 	}
@@ -124,6 +136,9 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 					}
 					defer f.Close()
 					params.Files = append(params.Files, &discordgo.File{Name: artifactName(p), Reader: f})
+				}
+				if reply.Pending != nil {
+					params.Components = confirmButtons(reply.Pending.Token)
 				}
 			}
 			if _, err := s.FollowupMessageCreate(i.Interaction, true, params); err != nil {
@@ -167,6 +182,61 @@ func (b *Bot) onWalletCommand(s *discordgo.Session, i *discordgo.InteractionCrea
 	}
 	ephemeral(s, i, "✅ Connected. Your key is encrypted at rest — the stored file is useless without the server secret, which never lives on the data card. "+
 		"I act only on your wallet, only for you. Ask for balances, a token launch, or a trade. `/disconnect` wipes it anytime.")
+}
+
+// onButton handles the Confirm/Cancel buttons on a queued fund-moving action.
+// The click, by the original requester, is what authorizes the transaction —
+// verified in Go, so nothing the model (or a fetched web page) does can
+// trigger it. Runs in the background: Bankr can take up to ~90s.
+func (b *Bot) onButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	id := i.MessageComponentData().CustomID
+	_, uid := interactionUser(i)
+	var action, token string
+	if t, ok := strings.CutPrefix(id, "bankr:confirm:"); ok {
+		action, token = "confirm", t
+	} else if t, ok := strings.CutPrefix(id, "bankr:cancel:"); ok {
+		action, token = "cancel", t
+	} else {
+		return
+	}
+
+	if action == "cancel" {
+		msg := "Cancelled — nothing moved."
+		if err := b.agent.CancelBankr(token, uid); err != nil {
+			msg = "⚠️ " + err.Error()
+		}
+		// replace the buttons with the outcome (edit, keep it ephemeral-ish)
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{Content: msg, Components: []discordgo.MessageComponent{}},
+		})
+		return
+	}
+
+	// confirm: acknowledge (drop the buttons) then execute in the background
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{Content: "⏳ Executing…", Components: []discordgo.MessageComponent{}},
+	})
+	go func() {
+		b.locks <- struct{}{}
+		defer func() { <-b.locks }()
+		out, err := b.agent.ConfirmBankr(token, uid)
+		result := out
+		if err != nil {
+			result = "⚠️ " + err.Error()
+		}
+		if result == "" {
+			result = "Done."
+		}
+		for n, chunk := range splitMessage(result, 1990) {
+			_, e := s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: chunk})
+			if e != nil {
+				log.Printf("confirm followup: %v", e)
+			}
+			_ = n
+		}
+	}()
 }
 
 func (b *Bot) Start() error { return b.session.Open() }
@@ -226,7 +296,7 @@ func (b *Bot) send(channelID string, ref *discordgo.MessageReference, r Reply) {
 		if i == 0 {
 			msg.Reference = ref
 		}
-		if i == len(chunks)-1 { // artifacts ride the last chunk
+		if i == len(chunks)-1 { // artifacts + confirm buttons ride the last chunk
 			for _, p := range r.Artifacts {
 				f, err := os.Open(p)
 				if err != nil {
@@ -234,6 +304,9 @@ func (b *Bot) send(channelID string, ref *discordgo.MessageReference, r Reply) {
 				}
 				defer f.Close()
 				msg.Files = append(msg.Files, &discordgo.File{Name: artifactName(p), Reader: f})
+			}
+			if r.Pending != nil {
+				msg.Components = confirmButtons(r.Pending.Token)
 			}
 		}
 		if _, err := b.session.ChannelMessageSendComplex(channelID, msg); err != nil {

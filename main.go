@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -44,6 +45,10 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
+	// Graceful drain: a hot-deploy killall must not eat an in-flight turn —
+	// finish and reply first (bounded), then drop the gateway.
+	log.Println("nanoclaw draining — finishing in-flight turns")
+	bot.Drain(2 * time.Minute)
 	bot.Close()
 	log.Println("nanoclaw down")
 }

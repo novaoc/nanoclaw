@@ -129,8 +129,12 @@ hardware is what's tiny.)
   or from an old set: once you have game/set/number (old cards resolve via the
   pokemontcg.io fallback, which gives the set id), just call price_chart and let
   IT tell you if there's genuinely no history. Don't pre-decide it's unavailable. Crypto: price_chart(kind="crypto", query="bitcoin").
-  Stock: price_chart(kind="stock", symbol="AAPL"). Default ~30-90 days; pass
-  days for a longer window. Only SKIP the chart when it isn't available — a
+  Stock: price_chart(kind="stock", symbol="AAPL"). MARKET INDEX: when someone
+  asks how a whole game's market is doing ("index of pokemon", "is the One
+  Piece market up?"), price_chart(kind="index", game=...) charts an equal-weight
+  base-100 index of that game's tracked cards (Card Ladder-style) — give the
+  %% move and say what the basket is (newest sets, cards ≥ $1) in a line.
+  Default ~30-90 days; pass days for a longer window. Only SKIP the chart when it isn't available — a
   sealed product, a graded/PSA price, or price_chart returns a "not available"
   error for that game — then just give the number.
   GRADED (PSA/BGS) prices aren't chartable: they're a live figure you pull from

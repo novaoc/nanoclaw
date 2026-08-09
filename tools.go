@@ -69,11 +69,12 @@ func toolDefs(cfg *Config) []ToolDef {
 			"Fetch an image by URL and attach it to your Discord reply (e.g. a card image from a tcg lookup, or any picture the user asks to see). Images only, up to 8MB.",
 			`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),
 		mk("price_chart",
-			"Build a historical price chart IMAGE (a PNG that displays inline in Discord) and attach it to your reply. kind=card|stock|crypto. "+
+			"Build a historical price chart IMAGE (a PNG that displays inline in Discord) and attach it to your reply. kind=card|stock|crypto|index. "+
 				"For a CARD: tcg-lookup it first, then pass game, set, number, and query=<card name> (uses rarebox price history, daily ~90d). "+
 				"For CRYPTO: query=<name/symbol e.g. bitcoin> (CoinGecko). For a STOCK: symbol=<ticker e.g. AAPL> (Yahoo). "+
-				"Optional days (default 30, cards 90). This is neutral price data — not advice.",
-			`{"type":"object","properties":{"kind":{"type":"string","description":"card|stock|crypto"},"game":{"type":"string"},"set":{"type":"string"},"number":{"type":"string"},"symbol":{"type":"string","description":"stock ticker"},"query":{"type":"string","description":"crypto name/symbol, or card display name"},"days":{"type":"integer"}},"required":["kind"]}`),
+				"For an INDEX (a whole game's market, Card Ladder-style): kind=index + game — charts an equal-weight base-100 index of that game's tracked cards (newest sets), e.g. 'how's the pokemon market doing?'. "+
+				"Optional days (default 30, cards/index 90). This is neutral price data — not advice.",
+			`{"type":"object","properties":{"kind":{"type":"string","description":"card|stock|crypto|index"},"game":{"type":"string"},"set":{"type":"string"},"number":{"type":"string"},"symbol":{"type":"string","description":"stock ticker"},"query":{"type":"string","description":"crypto name/symbol, or card display name"},"days":{"type":"integer"}},"required":["kind"]}`),
 		mk("bench_chart",
 			"Render an LLM benchmark comparison as a grouped-bar chart IMAGE (a PNG that displays inline in Discord) attached to your reply. "+
 				"Use AFTER researching real, dated scores with web_search/fetch_url — you pass the numbers in; NEVER guess a score. "+

@@ -124,7 +124,12 @@ func hline(img *image.RGBA, x0, x1, y int, c color.RGBA) {
 	}
 }
 
-func renderChartPNG(title, sub string, pts []pricePoint) []byte {
+// renderChartPNG draws the line chart. fmtVal formats axis/headline values;
+// nil means money (chartMoney) — an index passes its own unitless formatter.
+func renderChartPNG(title, sub string, pts []pricePoint, fmtVal func(float64) string) []byte {
+	if fmtVal == nil {
+		fmtVal = chartMoney
+	}
 	const W, H = 1600, 760
 	const PL, PR, PT, PB = 128, 44, 168, 66
 	img := image.NewRGBA(image.Rect(0, 0, W, H))
@@ -168,7 +173,7 @@ func renderChartPNG(title, sub string, pts []pricePoint) []byte {
 		v := ymin + (ymax-ymin)*float64(i)/4
 		yy := Y(v)
 		hline(img, PL, W-PR, yy, colGrid)
-		lbl := chartMoney(v)
+		lbl := fmtVal(v)
 		drawText(img, PL-14-textW(faceAxis, lbl), yy+7, lbl, colMut, faceAxis)
 	}
 	for i := 0; i <= 3; i++ {
@@ -188,7 +193,7 @@ func renderChartPNG(title, sub string, pts []pricePoint) []byte {
 	if first != 0 {
 		chg = (last - first) / first * 100
 	}
-	lp := chartMoney(last)
+	lp := fmtVal(last)
 	drawText(img, 40, 146, lp, colFG, facePrice)
 	drawText(img, 40+textW(facePrice, lp)+22, 146, fmt.Sprintf("%+.1f%%", chg), line, faceSub)
 	rng := fmt.Sprintf("%s – %s · %d pts",

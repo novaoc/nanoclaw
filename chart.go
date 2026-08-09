@@ -220,6 +220,7 @@ func (tc *ToolCtx) priceChart(a toolArgs) string {
 	var pts []pricePoint
 	var title, sub string
 	var err error
+	var fmtVal func(float64) string // nil = money
 	switch kind {
 	case "card":
 		// History for these games is keyed by collector number; others (one-piece
@@ -242,6 +243,24 @@ func (tc *ToolCtx) priceChart(a toolArgs) string {
 			title = fmt.Sprintf("%s %s #%s", a.Game, strings.ToUpper(a.Set), a.Number)
 		}
 		sub = fmt.Sprintf("%s %s #%s · %s", a.Game, strings.ToUpper(a.Set), a.Number, variant)
+	case "index":
+		g := strings.ToLower(strings.TrimSpace(a.Game))
+		if !tcgGames[g] {
+			return "chart error: index needs a game — pokemon|pokemon-ja|mtg|yugioh|lorcana|one-piece|one-piece-ja|riftbound."
+		}
+		if days == 0 {
+			days = 90
+		}
+		if days < 14 {
+			days = 14
+		} else if days > 365 {
+			days = 365
+		}
+		var nSets, nCards int
+		pts, nSets, nCards, err = marketIndex(g, days)
+		title = gameDisplay[g] + " market index"
+		sub = fmt.Sprintf("rarebox · newest %d sets · %d cards ≥ $1 · equal-weight · base 100 at window start", nSets, nCards)
+		fmtVal = func(v float64) string { return fmt.Sprintf("%.1f", v) }
 	case "crypto":
 		if a.Query == "" {
 			return "chart error: crypto needs a name or symbol (e.g. bitcoin)."
@@ -265,7 +284,7 @@ func (tc *ToolCtx) priceChart(a toolArgs) string {
 		pts, title, err = stockHistory(sym, days)
 		sub = "Yahoo Finance · USD"
 	default:
-		return "chart error: kind must be card, stock, or crypto."
+		return "chart error: kind must be card, stock, crypto, or index."
 	}
 	if err != nil {
 		return "chart error: " + err.Error()
@@ -273,8 +292,12 @@ func (tc *ToolCtx) priceChart(a toolArgs) string {
 	if len(pts) < 2 {
 		return "chart error: not enough price history to chart that yet."
 	}
-	if out := tc.saveArtifact(chartSlug(title)+".png", string(renderChartPNG(title, sub, pts))); strings.HasPrefix(out, "artifact error") {
+	if out := tc.saveArtifact(chartSlug(title)+".png", string(renderChartPNG(title, sub, pts, fmtVal))); strings.HasPrefix(out, "artifact error") {
 		return out
+	}
+	fv := fmtVal
+	if fv == nil {
+		fv = chartMoney
 	}
 	first, last := pts[0].Price, pts[len(pts)-1].Price
 	chg := 0.0
@@ -282,6 +305,6 @@ func (tc *ToolCtx) priceChart(a toolArgs) string {
 		chg = (last - first) / first * 100
 	}
 	span := (pts[len(pts)-1].Ms - pts[0].Ms) / 86400000
-	return fmt.Sprintf("Charted %s — %d points over ~%dd, $%.2f → $%.2f (%+.1f%%). Chart image is attached to your reply.",
-		title, len(pts), span, first, last, chg)
+	return fmt.Sprintf("Charted %s — %d points over ~%dd, %s → %s (%+.1f%%). Chart image is attached to your reply.",
+		title, len(pts), span, fv(first), fv(last), chg)
 }

@@ -18,8 +18,9 @@ type Bot struct {
 	session *discordgo.Session
 	// global turn semaphore (cap = cfg.Concurrency, default 1) — how many turns
 	// run at once, RAM-safe on the Nano; others queue on it.
-	locks   chan struct{}
-	pending int32 // in-flight + queued turns, to cap a spam pile-up (maxPending)
+	locks    chan struct{}
+	pending  int32 // in-flight + queued turns, to cap a spam pile-up (maxPending)
+	draining int32 // set on SIGTERM: finish in-flight turns, take no new ones
 }
 
 // maxPending bounds queued goroutines so a message flood can't OOM the 128 MB
@@ -163,6 +164,10 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	// dives queue on the same semaphore as messages, so they must respect the
 	// same OOM guard — unbounded /dive spam would pile up goroutines just like
 	// a message flood.
+	if atomic.LoadInt32(&b.draining) != 0 {
+		ephemeral(s, i, "🔌 I'm restarting for an update — try the dive again in a minute.")
+		return
+	}
 	if atomic.LoadInt32(&b.pending) >= maxPending {
 		ephemeral(s, i, "🚫 I'm at my queue limit right now — try the dive again in a minute.")
 		return
@@ -205,8 +210,21 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 func (b *Bot) Start() error { return b.session.Open() }
 func (b *Bot) Close()       { _ = b.session.Close() }
 
+// Drain stops accepting new turns and waits (bounded) for in-flight ones to
+// finish and send their replies — so a hot-deploy's killall doesn't eat a turn
+// mid-flight and leave the asker staring at a typing indicator that never
+// resolves. New messages during the drain are ignored, same as during the
+// restart gap that follows.
+func (b *Bot) Drain(timeout time.Duration) {
+	atomic.StoreInt32(&b.draining, 1)
+	deadline := time.Now().Add(timeout)
+	for atomic.LoadInt32(&b.pending) > 0 && time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
-	if m.Author == nil || m.Author.Bot {
+	if m.Author == nil || m.Author.Bot || atomic.LoadInt32(&b.draining) != 0 {
 		return
 	}
 	content := strings.TrimSpace(m.Content)

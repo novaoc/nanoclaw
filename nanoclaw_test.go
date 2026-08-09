@@ -32,8 +32,8 @@ func TestAgentLoopWithTools(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		step++
 		if step == 1 {
-			if req.Messages[0].Role != "system" || !strings.Contains(req.Messages[0].Content, "nanoclaw") {
-				t.Errorf("missing system prompt")
+			if req.Messages[0].Role != "system" || !strings.Contains(req.Messages[0].Content, "Vela") {
+				t.Errorf("missing Vela system prompt")
 			}
 			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[
 				{"id":"c1","type":"function","function":{"name":"save_artifact","arguments":"{\"name\":\"mock.html\",\"content\":\"<h1>hi</h1>\"}"}},

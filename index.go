@@ -87,20 +87,39 @@ func accumulateIndex(doc *histDoc, startDay, endDay int, sum []float64) int {
 }
 
 // marketIndex fetches the newest tracked sets of a game and returns the
-// equal-weight base-100 index series plus (sets, cards) in the basket.
-func marketIndex(game string, days int) ([]pricePoint, int, int, error) {
+// equal-weight base-100 index series plus (sets, cards) in the basket. dated
+// reports whether the catalog carries release dates: without them "newest N"
+// is meaningless (one-piece has releaseDate null on every set — sorting was
+// silently keeping catalog order and dropping the actual newest sets), so an
+// undated catalog is indexed whole, up to the fetch budget.
+func marketIndex(game string, days int) (pts []pricePoint, nSets, nCards int, dated bool, err error) {
 	var sets []rbSet
 	if err := rbGet(rbData+"/catalog/"+game+"/sets.json", &sets); err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, false, err
 	}
-	sort.SliceStable(sets, func(i, j int) bool { return sets[i].ReleaseDate > sets[j].ReleaseDate })
+	for _, s := range sets {
+		if strings.TrimSpace(s.ReleaseDate) != "" {
+			dated = true
+			break
+		}
+	}
+	setCap := maxIndexSets
+	if dated {
+		sort.SliceStable(sets, func(i, j int) bool { return sets[i].ReleaseDate > sets[j].ReleaseDate })
+	} else {
+		if len(sets) > indexFetchBudget {
+			// yugioh: 1000+ sets, none dated — 24 alphabetical sets would be a
+			// misleading basket, so refuse rather than mislabel
+			return nil, 0, 0, false, fmt.Errorf("can't build a reliable %s index: its catalog has %d sets but no release dates to pick the newest from", game, len(sets))
+		}
+		setCap = indexFetchBudget
+	}
 
 	endDay := int(time.Now().Unix() / 86400) // NTP-synced on the board
 	startDay := endDay - days
 	sum := make([]float64, days+1)
-	nSets, nCards := 0, 0
 	for i, s := range sets {
-		if nSets >= maxIndexSets || i >= indexFetchBudget {
+		if nSets >= setCap || i >= indexFetchBudget {
 			break
 		}
 		var doc histDoc
@@ -113,13 +132,13 @@ func marketIndex(game string, days int) ([]pricePoint, int, int, error) {
 		}
 	}
 	if nCards == 0 {
-		return nil, 0, 0, fmt.Errorf("no usable price history for a %s index", game)
+		return nil, 0, 0, dated, fmt.Errorf("no usable price history for a %s index", game)
 	}
-	pts := make([]pricePoint, 0, len(sum))
+	pts = make([]pricePoint, 0, len(sum))
 	for i, v := range sum {
 		pts = append(pts, pricePoint{Ms: int64(startDay+i) * 86400000, Price: v / float64(nCards)})
 	}
-	return pts, nSets, nCards, nil
+	return pts, nSets, nCards, dated, nil
 }
 
 var gameDisplay = map[string]string{

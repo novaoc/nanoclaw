@@ -257,9 +257,14 @@ func (tc *ToolCtx) priceChart(a toolArgs) string {
 			days = 365
 		}
 		var nSets, nCards int
-		pts, nSets, nCards, err = marketIndex(g, days)
+		var dated bool
+		pts, nSets, nCards, dated, err = marketIndex(g, days)
 		title = gameDisplay[g] + " market index"
-		sub = fmt.Sprintf("rarebox · newest %d sets · %d cards ≥ $1 · equal-weight · base 100 at window start", nSets, nCards)
+		basket := fmt.Sprintf("newest %d sets", nSets)
+		if !dated { // undated catalog → the whole catalog is the basket
+			basket = fmt.Sprintf("%d tracked sets", nSets)
+		}
+		sub = fmt.Sprintf("rarebox · %s · %d cards ≥ $1 · equal-weight · base 100 at window start", basket, nCards)
 		fmtVal = func(v float64) string { return fmt.Sprintf("%.1f", v) }
 	case "crypto":
 		if a.Query == "" {

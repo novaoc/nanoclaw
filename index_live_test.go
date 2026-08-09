@@ -12,7 +12,7 @@ func TestMarketIndexLive(t *testing.T) {
 	if out == "" {
 		t.Skip()
 	}
-	pts, nSets, nCards, err := marketIndex("pokemon", 90)
+	pts, nSets, nCards, _, err := marketIndex("pokemon", 90)
 	if err != nil {
 		t.Fatal(err)
 	}

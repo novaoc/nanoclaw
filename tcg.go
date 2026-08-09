@@ -85,6 +85,31 @@ func priceStr(prices map[string]float64, set, number string) string {
 	return ""
 }
 
+// cardPrice formats a card's price using the per-game key scheme rarebox uses:
+// most games key by set+number, but One Piece keys by card id (OP01-024).
+func cardPrice(prices map[string]float64, game, set string, c rbCard) string {
+	key := strings.ToLower(set) + "-" + rbNormNum(c.Number)
+	if game == "one-piece" || game == "one-piece-ja" {
+		key = strings.ToUpper(c.ID)
+	}
+	if p, ok := prices[key]; ok {
+		return fmt.Sprintf(" — $%.2f", p)
+	}
+	return ""
+}
+
+var punctRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+func looseNorm(s string) string { return punctRe.ReplaceAllString(strings.ToLower(s), "") }
+
+// looseContains matches a card name ignoring case, spaces, and punctuation, so
+// "Monkey D. Luffy" finds "Monkey.D.Luffy" and "Ahri signature" isn't needed
+// exact. Empty query matches nothing here (callers handle the no-filter case).
+func looseContains(name, query string) bool {
+	qn := looseNorm(query)
+	return qn != "" && strings.Contains(looseNorm(name), qn)
+}
+
 // jaHint nudges the model to search in English when a lookup misses — the
 // dataset indexes every game (Japanese sets included) under ENGLISH card names,
 // so a Japanese query never matches and retrying it just burns tool budget.
@@ -204,10 +229,10 @@ func tcgLookup(game, set, query string) string {
 	b.WriteString(":\n")
 	n := 0
 	for _, c := range cards {
-		if q != "" && !strings.Contains(strings.ToLower(c.Name), q) {
+		if q != "" && !looseContains(c.Name, q) {
 			continue
 		}
-		cardLine(&b, c, priceStr(prices, set, c.Number))
+		cardLine(&b, c, cardPrice(prices, game, set, c))
 		if n++; n >= 15 {
 			break
 		}
@@ -239,10 +264,10 @@ func tcgCardSearch(game, q string, sets []rbSet) string {
 			continue
 		}
 		for _, c := range cards {
-			if !strings.Contains(strings.ToLower(c.Name), q) {
+			if !looseContains(c.Name, q) {
 				continue
 			}
-			cardLine(&b, c, priceStr(prices, s.ID, c.Number)+" (set "+s.ID+" — "+s.Name+")")
+			cardLine(&b, c, cardPrice(prices, game, s.ID, c)+" (set "+s.ID+" — "+s.Name+")")
 			if n++; n >= 20 {
 				break
 			}

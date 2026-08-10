@@ -58,7 +58,7 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		if a.Name == "" {
 			return "github error: create_repo needs a name"
 		}
-		return gh.createRepo(a.Name, a.Description, a.Private)
+		return gh.createRepo(a.Name, a.Description)
 	case "create_rails_app":
 		if a.Name == "" {
 			return "github error: create_rails_app needs a name"
@@ -276,9 +276,11 @@ func (g *ghClient) downloadArchive(repo, ref, tempDir string) (string, string, e
 	return path, sha, nil
 }
 
-func (g *ghClient) createRepo(name, desc string, private bool) string {
+// createRepo creates public repositories for work Vela makes on request. The
+// private foundation is managed separately and never goes through this action.
+func (g *ghClient) createRepo(name, desc string) string {
 	m, st, err := g.do("POST", "/user/repos", map[string]any{
-		"name": name, "description": desc, "private": private, "auto_init": true,
+		"name": name, "description": desc, "private": false, "auto_init": true,
 	})
 	if err != nil {
 		return "github error: " + err.Error()

@@ -77,8 +77,8 @@ func TestRailsTemplateActionCreatesPublicAppsWithoutExposingTemplate(t *testing.
 			description = d.Function.Description
 		}
 	}
-	if !strings.Contains(description, "create_rails_app") || !strings.Contains(description, "ALWAYS-PUBLIC") {
-		t.Fatal("GitHub tool does not expose the public Rails app factory")
+	if !strings.Contains(description, "create_rails_app") || strings.Count(description, "ALWAYS-PUBLIC") < 2 {
+		t.Fatal("GitHub tool does not enforce public repositories for regular and Rails apps")
 	}
 	if strings.Contains(description, cfg.RailsTemplate) {
 		t.Fatal("private foundation repository leaked into the model-facing tool description")

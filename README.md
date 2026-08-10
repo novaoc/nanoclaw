@@ -161,6 +161,13 @@ Everything else is conversation. The old `/memory`, `/keys`, and `/focus`
 commands were removed; command registration bulk-overwrites, so stale commands
 from older builds disappear from the guild on their own.
 
+`/request` is an approval handoff, not a dead-drop form. Vela posts a concrete
+goal, short plan, and acceptance criteria, then waits. The new thread is seeded
+with both the original request and Vela's proposal; replies such as “go ahead”
+there approve that plan and start the build without requiring another mention
+or explanation. Threads Vela creates are remembered across restarts, so later
+replies remain addressed to her.
+
 ### Repos & PRs for everyone (github tool)
 
 Optional, and separate from the coder shell. With a `GITHUB_TOKEN` set, Vela

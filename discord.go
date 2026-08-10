@@ -20,8 +20,9 @@ type Bot struct {
 	// global turn semaphore (cap = cfg.Concurrency, default 1) — how many turns
 	// run at once, RAM-safe on the Nano; others queue on it.
 	locks    chan struct{}
-	pending  int32 // in-flight + queued turns, to cap a spam pile-up (maxPending)
-	draining int32 // set on SIGTERM: finish in-flight turns, take no new ones
+	threads  *OwnedThreads // forum posts Vela created; replies are addressed to her
+	pending  int32         // in-flight + queued turns, to cap a spam pile-up (maxPending)
+	draining int32         // set on SIGTERM: finish in-flight turns, take no new ones
 }
 
 // maxPending bounds queued goroutines so a message flood can't OOM the 128 MB
@@ -39,7 +40,10 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 	// Developer Portal would make Open() fail and crash-loop the bot offline.
 	s.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages |
 		discordgo.IntentMessageContent | discordgo.IntentsDirectMessages
-	b := &Bot{cfg: cfg, agent: agent, session: s, locks: make(chan struct{}, cfg.Concurrency)}
+	b := &Bot{
+		cfg: cfg, agent: agent, session: s,
+		locks: make(chan struct{}, cfg.Concurrency), threads: NewOwnedThreads(cfg),
+	}
 	s.AddHandler(b.onMessage)
 	s.AddHandler(b.onReady)
 	s.AddHandler(b.onGuildCreate)
@@ -204,7 +208,9 @@ func (b *Bot) onRequestCommand(s *discordgo.Session, i *discordgo.InteractionCre
 	go func() {
 		title, body := b.agent.FrameRequest(author, task)
 		body += "\n\n_requested by <@" + authorID + ">_"
-		url, err := b.CreateForumPost(fid, title, body)
+		_, url, err := b.CreateForumPost(fid, title, body, ForumOrigin{
+			Author: author, Request: task,
+		})
 		if err != nil {
 			_, _ = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 				Content: "Couldn't open the post in #" + fname + " (is it a forum channel I can post in?): " + err.Error(),
@@ -333,8 +339,9 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	content = strings.TrimSpace(content)
 
 	isDM := m.GuildID == ""
+	ownedThread := b.threads.Has(m.ChannelID)
 	ambient := false
-	if !mentioned && !isDM && !b.cfg.FocusChannels[m.ChannelID] {
+	if !mentioned && !isDM && !b.cfg.FocusChannels[m.ChannelID] && !ownedThread {
 		// Not addressed to her — the social layer records it and decides
 		// (locally, no API) whether she chimes in. Almost always: no.
 		if content == "" || !b.agent.Observe(m.ChannelID, m.Author.ID, m.Author.Username, content, true) {

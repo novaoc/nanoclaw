@@ -24,6 +24,8 @@ import (
 type ToolCtx struct {
 	cfg       *Config
 	authorID  string   // Discord user id of the requester — gates the coder allowlist
+	author    string   // display name, used to carry forum-post context forward
+	request   string   // original turn that caused a forum post
 	guildID   string   // guild of the current turn (for Discord actions)
 	channelID string   // channel of the current turn
 	disc      Discord  // Discord actuator (nil in headless/eval)

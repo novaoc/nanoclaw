@@ -146,7 +146,9 @@ func (tc *ToolCtx) discordForum(a toolArgs) string {
 		if err != nil {
 			return "couldn't find that forum channel: " + err.Error()
 		}
-		url, err := tc.disc.CreateForumPost(cid, a.Title, body)
+		_, url, err := tc.disc.CreateForumPost(cid, a.Title, body, ForumOrigin{
+			Author: tc.author, Request: tc.request,
+		})
 		if err != nil {
 			return "couldn't create the post (is that a forum channel, and do I have permission?): " + err.Error()
 		}

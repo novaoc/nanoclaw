@@ -19,8 +19,16 @@ type Discord interface {
 	Slowmode(channelID string, seconds int) error
 	ResolveMember(guildID, query string) (id, name string, err error)
 	ResolveChannel(guildID, query string) (id, name string, ctype int, err error)
-	CreateForumPost(forumChannelID, title, body string) (url string, err error)
+	CreateForumPost(forumChannelID, title, body string, origin ForumOrigin) (threadID, url string, err error)
 	PostMessage(channelID, body string) (url string, err error)
+}
+
+// ForumOrigin is the user turn that caused Vela to author a forum post. It is
+// seeded beside the post body in the new thread's model history, so a short
+// follow-up such as "go ahead" has the plan it approves.
+type ForumOrigin struct {
+	Author  string
+	Request string
 }
 
 // idFromMention extracts a bare user id from "<@123>"/"<@!123>"/"123". For a
@@ -106,14 +114,16 @@ func (b *Bot) ResolveChannel(guildID, query string) (string, string, int, error)
 }
 
 // CreateForumPost opens a new forum thread (post) with a title and first message.
-func (b *Bot) CreateForumPost(forumChannelID, title, body string) (string, error) {
+func (b *Bot) CreateForumPost(forumChannelID, title, body string, origin ForumOrigin) (string, string, error) {
 	th, err := b.session.ForumThreadStartComplex(forumChannelID,
 		&discordgo.ThreadStart{Name: title, AutoArchiveDuration: 1440},
 		&discordgo.MessageSend{Content: body})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return fmt.Sprintf("https://discord.com/channels/%s/%s", th.GuildID, th.ID), nil
+	b.threads.Add(th.ID)
+	b.agent.SeedForumThread(th.ID, origin.Author, origin.Request, body)
+	return th.ID, fmt.Sprintf("https://discord.com/channels/%s/%s", th.GuildID, th.ID), nil
 }
 
 // PostMessage sends a message to a channel or thread (used to reply to a forum

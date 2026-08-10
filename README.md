@@ -240,10 +240,13 @@ capability is entirely off; non-coders are refused in code.
 `shell` is deliberately unconfined for those who pass the allowlist.
 
 **Injection guard.** Web fetches (`web_search`/`fetch_url`) and code execution
-(`shell`/`write_file`/`read_file`) are mutually exclusive *within a single
-turn*: once a turn has touched the web, code is refused for that turn, and vice
-versa. A page fetched this turn therefore can't inject the shell commands the
-model then runs. Research in one message, run code in the next.
+(`shell`/`write_file`/`read_file`/GitHub/deploy) run in isolated internal
+phases. If Vela needs to cross that boundary, NanoClaw blocks the mixed-phase
+tool call, makes a bounded inert checkpoint, drops the raw tool transcript,
+and starts her next phase automatically. A fetched page therefore cannot flow
+directly into shell commands or a repository push, and the user does not need
+to reply “continue.” Phase changes are capped at six per request as a runaway
+safety bound.
 
 **⚠️ Deploy sequencing — do this before enabling coders in production.** A
 coder shell can read `GITHUB_TOKEN` from the environment and push whatever it

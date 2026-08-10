@@ -240,30 +240,131 @@ func TestCodeCapabilityGating(t *testing.T) {
 	}
 }
 
-// Web fetches and code execution must be mutually exclusive within a turn,
+// Web fetches and code execution must be mutually exclusive within a phase,
 // so a poisoned page can't inject the shell commands the model then runs.
 func TestWebCodeInjectionGuard(t *testing.T) {
 	cfg := testCfg(t)
 	cfg.Coders = map[string]bool{"dev": true}
 	cfg.Workspace = t.TempDir()
 
-	// fetch-then-shell: the shell must be refused
+	// fetch-then-shell: the shell must be deferred to an execution phase.
 	tc := &ToolCtx{cfg: cfg, authorID: "dev"}
 	_ = tc.Run("web_search", `{"query":"anything"}`) // may error at network; sets usedWeb
 	if !tc.usedWeb {
 		t.Fatal("web_search should mark the turn as web-touched")
 	}
-	if out := tc.Run("shell", `{"command":"echo hi"}`); !strings.Contains(out, "REFUSED") {
-		t.Fatalf("shell after a web fetch must be refused: %s", out)
+	if out := tc.Run("shell", `{"command":"echo hi"}`); !strings.Contains(out, "PHASE_BOUNDARY") {
+		t.Fatalf("shell after a web fetch must cross a phase boundary: %s", out)
+	}
+	if tc.boundary == nil || tc.boundary.Lane != "code" || tc.usedCode {
+		t.Fatalf("shell must remain unexecuted and request code phase: %+v", tc)
+	}
+	// Deploys are execution too: fetched content cannot flow directly into a
+	// generated app bundle sent to Holodeck.
+	tcDeploy := &ToolCtx{cfg: cfg, authorID: "dev", usedWeb: true}
+	if out := tcDeploy.Run("deploy_demo", `{"name":"unsafe"}`); !strings.Contains(out, "PHASE_BOUNDARY") {
+		t.Fatalf("deploy after web must cross a phase boundary: %s", out)
+	}
+	if tcDeploy.boundary == nil || tcDeploy.boundary.Lane != "code" || tcDeploy.usedCode {
+		t.Fatalf("deploy must remain unexecuted and request code phase: %+v", tcDeploy)
 	}
 
-	// shell-then-fetch: the fetch must be refused
+	// shell-then-fetch: the fetch must be deferred to a read-only phase.
 	tc2 := &ToolCtx{cfg: cfg, authorID: "dev"}
 	if out := tc2.Run("shell", `{"command":"echo hi"}`); strings.Contains(out, "REFUSED") {
 		t.Fatalf("first shell should run, got: %s", out)
 	}
-	if out := tc2.Run("fetch_url", `{"url":"https://example.com"}`); !strings.Contains(out, "REFUSED") {
-		t.Fatalf("fetch after shell must be refused: %s", out)
+	if out := tc2.Run("fetch_url", `{"url":"https://example.com"}`); !strings.Contains(out, "PHASE_BOUNDARY") {
+		t.Fatalf("fetch after shell must cross a phase boundary: %s", out)
+	}
+	if tc2.boundary == nil || tc2.boundary.Lane != "web" || tc2.usedWeb {
+		t.Fatalf("fetch must remain unexecuted and request web phase: %+v", tc2)
+	}
+}
+
+// Crossing code -> web -> code is one user request. NanoClaw must make fresh
+// internal phases and finish the build without waiting for another message.
+func TestAutomaticWebCodePhaseContinuation(t *testing.T) {
+	step := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		step++
+		write := func(body string) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		}
+		countRole := func(role string) int {
+			n := 0
+			for _, m := range req.Messages {
+				if m.Role == role {
+					n++
+				}
+			}
+			return n
+		}
+
+		switch step {
+		case 1:
+			write(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"write-1","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"phase-one.txt\",\"content\":\"started\"}"}}]}}]}`)
+		case 2:
+			write(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"defer-web","type":"function","function":{"name":"fetch_url","arguments":"{\"url\":\"http://127.0.0.1/untrusted\"}"}}]}}]}`)
+		case 3:
+			if len(req.Tools) != 0 {
+				t.Errorf("checkpoint must have tools disabled")
+			}
+			write(`{"choices":[{"message":{"role":"assistant","content":"The approved job has started; phase-one.txt exists. One factual web read remains, then finish phase-two.txt."}}]}`)
+		case 4:
+			if countRole("tool") != 0 {
+				t.Errorf("raw code tool traffic crossed into web phase")
+			}
+			if last := req.Messages[len(req.Messages)-1].Content; !strings.Contains(last, "READ-ONLY PHASE") {
+				t.Errorf("missing automatic web continuation: %q", last)
+			}
+			write(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"web-read","type":"function","function":{"name":"fetch_url","arguments":"{\"url\":\"http://127.0.0.1/untrusted\"}"}}]}}]}`)
+		case 5:
+			write(`{"choices":[{"message":{"role":"assistant","content":"Read phase complete with no trusted remote content."}}]}`)
+		case 6:
+			if len(req.Tools) != 0 {
+				t.Errorf("second checkpoint must have tools disabled")
+			}
+			write(`{"choices":[{"message":{"role":"assistant","content":"The read phase produced no trusted remote content. phase-one.txt exists and phase-two.txt remains."}}]}`)
+		case 7:
+			if countRole("tool") != 0 {
+				t.Errorf("raw web tool traffic crossed into execution phase")
+			}
+			if last := req.Messages[len(req.Messages)-1].Content; !strings.Contains(last, "EXECUTION PHASE") {
+				t.Errorf("missing automatic code continuation: %q", last)
+			}
+			write(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"write-2","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"phase-two.txt\",\"content\":\"finished\"}"}}]}}]}`)
+		case 8:
+			write(`{"choices":[{"message":{"role":"assistant","content":"done without another user reply"}}]}`)
+		default:
+			t.Errorf("unexpected LLM request %d", step)
+			write(`{"choices":[{"message":{"role":"assistant","content":"unexpected"}}]}`)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := testCfg(t)
+	cfg.DeepseekURL = srv.URL
+	cfg.Workspace = t.TempDir()
+	cfg.Coders = map[string]bool{"dev": true}
+	reply := NewAgent(cfg).Handle("phase-channel", "dev", "wren", "build the app and look up one fact")
+
+	if reply.Text != "done without another user reply" {
+		t.Fatalf("automatic continuation did not finish: %q", reply.Text)
+	}
+	if step != 8 {
+		t.Fatalf("expected eight model calls across three phases, got %d", step)
+	}
+	for path, want := range map[string]string{"phase-one.txt": "started", "phase-two.txt": "finished"} {
+		got, err := os.ReadFile(filepath.Join(cfg.Workspace, path))
+		if err != nil || string(got) != want {
+			t.Fatalf("%s = %q, %v; want %q", path, got, err, want)
+		}
 	}
 }
 

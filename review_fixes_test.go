@@ -37,8 +37,11 @@ func TestAttachImageCountsAsWeb(t *testing.T) {
 	if out := tc.Run("shell", `{"command":"true"}`); strings.Contains(out, "REFUSED") {
 		t.Fatalf("coder shell should run, got %q", out)
 	}
-	if out := tc.Run("attach_image", `{"url":"https://example.com/x.png"}`); !strings.Contains(out, "REFUSED") {
-		t.Fatalf("attach_image after code must be refused, got %q", out)
+	if out := tc.Run("attach_image", `{"url":"https://example.com/x.png"}`); !strings.Contains(out, "PHASE_BOUNDARY") {
+		t.Fatalf("attach_image after code must cross a phase boundary, got %q", out)
+	}
+	if tc.boundary == nil || tc.boundary.Lane != "web" || tc.usedWeb {
+		t.Fatalf("attach_image must remain unexecuted and request web phase: %+v", tc)
 	}
 }
 

@@ -32,6 +32,15 @@ type ToolCtx struct {
 	Artifacts []string // file paths saved this turn
 	usedWeb   bool     // this turn touched the web (fetch/search)
 	usedCode  bool     // this turn ran code (shell/file) — mutually exclusive with web
+	boundary  *phaseBoundary
+}
+
+// phaseBoundary is an attempted web↔code transition. The tool stays blocked,
+// but the agent consumes this signal and starts a fresh internal phase instead
+// of exposing a REFUSED dead end to the user.
+type phaseBoundary struct {
+	Lane string // web | code
+	Tool string
 }
 
 // clip truncates on a UTF-8 rune boundary so we never split a character.
@@ -145,7 +154,7 @@ func toolDefs(cfg *Config) []ToolDef {
 	if cfg.CodeEnabled() { // gated to the coder allowlist (NANOCLAW_CODERS)
 		defs = append(defs,
 			mk("shell",
-				"Run a shell command in your code workspace (persists across turns). Use for git, libraries, builds, tests, and scaffolding. 180s timeout. You run on a memory-limited single-core RISC-V board; keep local work light and use verify_repo for heavy repository builds. NOTE: code and web fetches can't run in the same turn (injection guard) — if you need to research first, do it in a separate message, then run code.",
+				"Run a shell command in your code workspace (persists across turns). Use for git, libraries, builds, tests, and scaffolding. 180s timeout. You run on a memory-limited single-core RISC-V board; keep local work light and use verify_repo for heavy repository builds. NOTE: code and web fetches run in isolated phases (injection guard); NanoClaw checkpoints and changes phases automatically, so never ask the user to say continue just to switch.",
 				`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`),
 			mk("write_file",
 				"Write a file in your workspace (creates dirs). Prefer this over shell heredocs for writing code.",
@@ -255,12 +264,14 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// arbitrary outbound GET — after a code turn (which can read env/tokens) it
 	// would otherwise be an exfiltration channel via the URL.
 	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart" || name == "attach_image" || name == "model_releases" || name == "generate_image" || name == "generate_video"
-	code := name == "shell" || name == "write_file" || name == "read_file" || name == "github" || name == "verify_repo" || name == "deploy_repo"
+	code := name == "shell" || name == "write_file" || name == "read_file" || name == "github" || name == "deploy_demo" || name == "verify_repo" || name == "deploy_repo"
 	if web && tc.usedCode {
-		return "REFUSED: web fetch blocked — this turn already ran code or a GitHub write, and untrusted page content must not mix with those. Do the browsing in a separate message."
+		tc.boundary = &phaseBoundary{Lane: "web", Tool: name}
+		return "PHASE_BOUNDARY: web fetch deferred to a fresh isolated read-only phase."
 	}
 	if code && tc.usedWeb {
-		return "REFUSED: blocked — this turn already fetched from the web, and a fetched page must not be able to reach a shell or push code (prompt-injection guard). Run this in a separate message from any browsing."
+		tc.boundary = &phaseBoundary{Lane: "code", Tool: name}
+		return "PHASE_BOUNDARY: code action deferred to a fresh isolated execution phase."
 	}
 
 	switch name {

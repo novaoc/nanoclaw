@@ -210,7 +210,7 @@ contents + pull-request write only, no admin**, treated as rotatable. Then a
 stolen token costs embarrassment, not infrastructure. nanoclaw logs this
 reminder at startup when code + a token are both configured.
 
-**Hardware reality — she's a 22×36 mm board, not a build server.** The
+**Hardware reality — she's a 35.56 × 22.86 mm board, not a build server.** The
 LicheeRV Nano is one ~1 GHz RISC-V core + **256 MB RAM**. Great for git, small
 scripts, config, and lightweight installs; a big `npm install`, a from-source
 compile, or a heavy test suite will crawl or OOM, and RISC-V means some

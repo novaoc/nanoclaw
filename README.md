@@ -42,6 +42,10 @@ reply + attachments ◄─ 2000-char splitting ◄─┘  per-channel history on
 
 - Answers when **@mentioned** anywhere, in **DMs**, and in configured
   **focus channels** without a mention — anyone in the server can use it.
+- **Lives in the group** (2.0): sees every channel message, and occasionally
+  chimes in unprompted when the conversation genuinely interests her — gated
+  by a local willingness model (zero API cost for the messages she skips) and
+  tunable with `NANOCLAW_TALK_VALUE`.
 - **Sees images**: an attached picture (in the message or the one it replies to)
   is read by a vision model and folded into the turn — snap a card, get its price.
 - Per-channel conversation history and one shared long-term memory file,
@@ -88,6 +92,41 @@ It also runs anywhere else (`make run`) — the Nano is the destination, not a
 requirement, so you can dev on a laptop with the same env file.
 
 ## Using it
+
+### Living in the group (2.0)
+
+The 2.0 social layer borrows the mechanics that make
+[MaiBot](https://github.com/Mai-with-u/MaiBot) feel alive in group chats,
+rebuilt flat-file-sized for the Nano:
+
+- **Willingness, not triggers.** Vela reads every message and scores it
+  locally (length, whether it touches topics she has memories about,
+  mentions). Interest accumulates per channel into a *willingness* level that
+  decays when the room goes quiet; only when it clears the bar does she spend
+  a real model turn to chime in — short, casual, matching the room. Deciding
+  costs nothing (no API call), staying quiet is the default outcome of every
+  failure path, and an exponential backoff keeps her from even reconsidering
+  too often. `NANOCLAW_TALK_VALUE` (0–1, default 0.3) scales how chatty; 0
+  turns ambient chiming off entirely. Mentions, DMs, and focus channels
+  answer every time, as always.
+- **Human pacing.** Short conversational replies go out as two or three
+  separate messages with a typing beat between them — a person texting, not a
+  bot filing a report. Code, links, attachments, and long answers still
+  arrive as one message.
+- **People, not user IDs.** She keeps a small evolving impression of each
+  person — what they care about, how they talk, the nickname she privately
+  calls them — rewritten by a cheap model call every ~45 messages from what
+  they actually said. The one-line form rides into her prompt when she
+  answers that person, so familiarity is earned and drifts with evidence.
+  One JSON file per person on the SD.
+- **Learning the room's voice.** Every few hours she reads a sample of each
+  active channel's chatter and distills *how that room talks* into small
+  reusable style rules ("when teasing someone → short lowercase jab"). Rules
+  carry use counts, get reinforced when they resurface, decay when ignored,
+  and a weighted sample seasons her prompt — so each channel slowly gets its
+  own Vela. Voice only, never facts (facts stay in MEMORY.md), and slurs are
+  excluded at the prompt level. `NANOCLAW_LEARNING=off` disables impressions
+  and expression learning together.
 
 ### The loop — every turn, by default
 

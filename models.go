@@ -37,14 +37,14 @@ func modelOrgs(cfg *Config) []string {
 }
 
 type hfModel struct {
-	ID           string  `json:"id"`         // "deepseek-ai/DeepSeek-V3"
-	CreatedAt    string  `json:"createdAt"`  // RFC3339
-	Downloads    int     `json:"downloads"`  //
-	Likes        int     `json:"likes"`      //
-	Pipeline     string  `json:"pipeline_tag"`
-	Gated        any     `json:"gated"`
-	Private      bool    `json:"private"`
-	Trending     float64 `json:"trendingScore"`
+	ID        string  `json:"id"`        // "deepseek-ai/DeepSeek-V3"
+	CreatedAt string  `json:"createdAt"` // RFC3339
+	Downloads int     `json:"downloads"` //
+	Likes     int     `json:"likes"`     //
+	Pipeline  string  `json:"pipeline_tag"`
+	Gated     any     `json:"gated"`
+	Private   bool    `json:"private"`
+	Trending  float64 `json:"trendingScore"`
 }
 
 // fetchLabModels pulls a lab's newest models (by creation date).

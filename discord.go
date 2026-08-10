@@ -192,14 +192,24 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			mentioned = true
 		}
 	}
-	isDM := m.GuildID == ""
-	if !mentioned && !isDM && !b.cfg.FocusChannels[m.ChannelID] {
-		return
-	}
 	// strip the mention so the model sees the question, not the ping
 	content = strings.ReplaceAll(content, "<@"+s.State.User.ID+">", "")
 	content = strings.ReplaceAll(content, "<@!"+s.State.User.ID+">", "")
 	content = strings.TrimSpace(content)
+
+	isDM := m.GuildID == ""
+	ambient := false
+	if !mentioned && !isDM && !b.cfg.FocusChannels[m.ChannelID] {
+		// Not addressed to her — the social layer records it and decides
+		// (locally, no API) whether she chimes in. Almost always: no.
+		if content == "" || !b.agent.Observe(m.ChannelID, m.Author.ID, m.Author.Username, content, true) {
+			return
+		}
+		ambient = true
+	} else if !isDM && content != "" {
+		// She'll answer anyway — record for the transcript/impressions only.
+		b.agent.Observe(m.ChannelID, m.Author.ID, m.Author.Username, content, false)
+	}
 
 	// Pick up any image attachments for the vision pass — from THIS message and,
 	// when it's a reply, from the message it replies to (so "@vela what's this?"
@@ -260,8 +270,16 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		reply := b.agent.HandleTurn(Turn{
 			ChannelID: m.ChannelID, GuildID: m.GuildID,
 			AuthorID: m.Author.ID, Author: m.Author.Username, ImageURLs: images,
+			Ambient: ambient,
 		}, content)
 		close(stop)
+		if ambient {
+			if reply.Text == "" && len(reply.Artifacts) == 0 {
+				return // she chose silence — the only polite ambient failure mode
+			}
+			b.send(m.ChannelID, nil, reply) // joining the flow, not quote-replying
+			return
+		}
 		b.send(m.ChannelID, m.Reference(), reply)
 	}()
 }
@@ -270,6 +288,28 @@ func (b *Bot) send(channelID string, ref *discordgo.MessageReference, r Reply) {
 	text := r.Text
 	if text == "" {
 		text = "(no reply)"
+	}
+	// Human pacing (the MaiBot response-splitter): a short conversational
+	// reply with several sentences goes out as a few separate messages with a
+	// typing beat between them — a person texting, not a bot filing a report.
+	// Anything with attachments, code, or real length uses the plain path.
+	if len(r.Artifacts) == 0 {
+		if hc := humanChunks(text); hc != nil {
+			for i, chunk := range hc {
+				if i > 0 {
+					_ = b.session.ChannelTyping(channelID)
+					time.Sleep(typeDelay(chunk))
+				}
+				msg := &discordgo.MessageSend{Content: chunk}
+				if i == 0 {
+					msg.Reference = ref
+				}
+				if _, err := b.session.ChannelMessageSendComplex(channelID, msg); err != nil {
+					log.Printf("send error: %v", err)
+				}
+			}
+			return
+		}
 	}
 	chunks := splitMessage(text, 1990)
 	for i, chunk := range chunks {
@@ -300,6 +340,67 @@ func artifactName(p string) string {
 		return rest
 	}
 	return base
+}
+
+// humanChunks splits a short conversational reply into 2-3 texting-sized
+// messages at sentence/line boundaries. Returns nil when the reply should go
+// out as one message (code, length, or just one sentence).
+func humanChunks(text string) []string {
+	if len(text) > 420 || strings.Contains(text, "```") || strings.Contains(text, "http") {
+		return nil
+	}
+	var sents []string
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			sents = append(sents, splitSentences(line)...)
+		}
+	}
+	if len(sents) < 2 {
+		return nil
+	}
+	// pack sentences into at most 3 chunks, breaking at natural pauses
+	perChunk := (len(sents) + 2) / 3
+	var out []string
+	for len(sents) > 0 {
+		n := perChunk
+		if n > len(sents) {
+			n = len(sents)
+		}
+		out = append(out, strings.Join(sents[:n], " "))
+		sents = sents[n:]
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
+}
+
+// splitSentences cuts on sentence enders, keeping the punctuation.
+func splitSentences(s string) []string {
+	var out []string
+	start := 0
+	for i, r := range s {
+		if (r == '.' || r == '!' || r == '?') && (i+1 == len(s) || s[i+1] == ' ') {
+			if frag := strings.TrimSpace(s[start : i+1]); frag != "" {
+				out = append(out, frag)
+			}
+			start = i + 1
+		}
+	}
+	if frag := strings.TrimSpace(s[start:]); frag != "" {
+		out = append(out, frag)
+	}
+	return out
+}
+
+// typeDelay fakes typing time for a chunk: a beat plus a bit per character,
+// capped so nothing feels laggy.
+func typeDelay(chunk string) time.Duration {
+	d := 600*time.Millisecond + time.Duration(len(chunk))*12*time.Millisecond
+	if d > 2500*time.Millisecond {
+		d = 2500 * time.Millisecond
+	}
+	return d
 }
 
 // splitMessage breaks text at line boundaries under the Discord cap.

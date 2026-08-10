@@ -53,6 +53,14 @@ func clampInt(s string, def, lo, hi int) int {
 	return def
 }
 
+// clampFloat parses s and keeps it within [lo,hi], else returns def.
+func clampFloat(s string, def, lo, hi float64) float64 {
+	if f, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil && f >= lo && f <= hi {
+		return f
+	}
+	return def
+}
+
 // VisionEnabled reports whether Vela can read images sent to Discord.
 func (c *Config) VisionEnabled() bool { return c.VisionModel != "" }
 
@@ -105,6 +113,9 @@ type Config struct {
 	HistoryTurns  int
 	Passes        int    // self-review passes on the text model (the looper play); 1 = no loop
 	BraveKey      string // BRAVE_API_KEY — real search API; falls back to DuckDuckGo scraping
+	// 2.0 group presence + learning
+	TalkValue float64 // NANOCLAW_TALK_VALUE 0-1: chattiness of unprompted chime-ins; 0 = off
+	Learning  bool    // NANOCLAW_LEARNING: expression learning + person impressions
 
 	Coders     map[string]bool // Discord IDs allowed to run shell/code (root-trust)
 	RepoUsers  map[string]bool // Discord IDs allowed the github API tool; empty = everyone
@@ -171,6 +182,8 @@ func LoadConfig() (*Config, error) {
 		// ran ~8 min). NANOCLAW_PASSES, falls back to NANOCLAW_DIVE_PASSES; 1-8.
 		Passes:        clampInt(firstNonEmpty(get("NANOCLAW_PASSES", ""), get("NANOCLAW_DIVE_PASSES", "")), 2, 1, 8),
 		BraveKey:      get("BRAVE_API_KEY", ""),
+		TalkValue:     clampFloat(get("NANOCLAW_TALK_VALUE", ""), 0.3, 0, 1),
+		Learning:      get("NANOCLAW_LEARNING", "on") != "off",
 		Coders:        map[string]bool{},
 		RepoUsers:     map[string]bool{},
 		Mods:          map[string]bool{},

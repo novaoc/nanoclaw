@@ -156,7 +156,7 @@ func renderBenchPNG(title, source string, benchmarks []string, models []benchMod
 		ymax = 100
 	} else {
 		step := math.Pow(10, math.Floor(math.Log10(ymax*1.05)))
-		ymax = math.Ceil(ymax * 1.05 / step) * step
+		ymax = math.Ceil(ymax*1.05/step) * step
 	}
 	plotW, plotH := W-PL-PR, H-PT-PB
 	baseY := PT + plotH

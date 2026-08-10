@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
@@ -48,7 +49,9 @@ func main() {
 	if err := bot.Start(); err != nil {
 		log.Fatalf("discord connect: %v", err)
 	}
-	log.Printf("nanoclaw up — model=%s data=%s", cfg.Model, cfg.DataDir)
+	learnCtx, stopLearning := context.WithCancel(context.Background())
+	agent.StartLearning(learnCtx) // background expression learning (2.0)
+	log.Printf("nanoclaw up — model=%s data=%s talk=%.2f learning=%v", cfg.Model, cfg.DataDir, cfg.TalkValue, cfg.Learning)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -59,6 +62,7 @@ func main() {
 	// one mid-render. Drain only waits while turns are actually in flight, so
 	// the longer ceiling costs nothing on an idle deploy.
 	log.Println("nanoclaw draining — finishing in-flight turns")
+	stopLearning()
 	bot.Drain(6 * time.Minute)
 	bot.Close()
 	log.Println("nanoclaw down")

@@ -128,14 +128,18 @@ rebuilt flat-file-sized for the Nano:
   excluded at the prompt level. `NANOCLAW_LEARNING=off` disables impressions
   and expression learning together.
 
-### The loop — every turn, by default
+### /dive — the deep loop, on request
 
-Every request runs the looper protocol: state the goal and acceptance
-criteria, work the tools, then **self-review** — the model re-reads its own
-answer against the criteria and repairs it before you see it
-(`NANOCLAW_PASSES`, default 2; the old `/dive` command is gone because this
-is now just how she works). The economics are the point: a cheap model looped
-twice with a clear goal beats one expensive shot, at a fraction of the cost.
+Normal turns answer **once** — snappy, texting-speed (`NANOCLAW_PASSES`,
+default 1). When something deserves more, `/dive` runs the looper protocol:
+state the goal and acceptance criteria, work with a doubled tool budget, then
+**self-review** — the model re-reads its own answer against the criteria and
+repairs it before you see it (`NANOCLAW_DIVE_PASSES`, default 2). The
+economics are the point: a cheap model looped twice with a clear goal beats
+one expensive shot, at a fraction of the cost — but the loop is a gear you
+shift into, not the idle she drives around in.
+
+> **/dive** task: compare the latest DeepSeek release against GPT on coding benchmarks — real numbers with dates
 
 ### Image & video generation (Grok)
 
@@ -150,10 +154,11 @@ Auth is either a **SuperGrok / X Premium+ subscription** — an admin runs
 pay-as-you-go `XAI_API_KEY` from console.x.ai. `NANOCLAW_IMAGE_USERS`
 restricts who can spend; blank opens it to the whole server.
 
-`/grok` (login/status/logout) is the **only slash command** — everything else
-is just conversation. (The old `/memory`, `/keys`, and `/focus` commands were
-removed; command registration bulk-overwrites, so stale commands from older
-builds disappear from the guild on their own.)
+The only slash commands are `/dive` (the deep loop) and `/grok`
+(login/status/logout) — everything else is just conversation. (The old
+`/memory`, `/keys`, and `/focus` commands were removed; command registration
+bulk-overwrites, so stale commands from older builds disappear from the guild
+on their own.)
 
 ### Repos & PRs for everyone (github tool)
 

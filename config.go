@@ -28,23 +28,6 @@ func loadFocus(dataDir string) []string {
 	return out
 }
 
-func atoiOr(s string, def int) int {
-	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n >= 1 && n <= 5 {
-		return n
-	}
-	return def
-}
-
-// firstNonEmpty returns the first non-blank string (env fallback chains).
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // clampInt parses s and keeps it within [lo,hi], else returns def.
 func clampInt(s string, def, lo, hi int) int {
 	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n >= lo && n <= hi {
@@ -111,7 +94,9 @@ type Config struct {
 	MaxToolIters  int
 	Concurrency   int // max turns running at once; 1 = strict queue (RAM-safe on the Nano)
 	HistoryTurns  int
-	Passes        int    // self-review passes on the text model (the looper play); 1 = no loop
+	Passes        int    // self-review passes on normal turns; 1 = answer once, no loop
+	DiveToolIters int    // /dive gets a bigger tool budget…
+	DivePasses    int    // …and N self-review passes (the looper-model play)
 	BraveKey      string // BRAVE_API_KEY — real search API; falls back to DuckDuckGo scraping
 	// 2.0 group presence + learning
 	TalkValue float64 // NANOCLAW_TALK_VALUE 0-1: chattiness of unprompted chime-ins; 0 = off
@@ -176,11 +161,12 @@ func LoadConfig() (*Config, error) {
 		MaxToolIters:  clampInt(get("NANOCLAW_MAX_ITERS", ""), 20, 4, 40),
 		Concurrency:   clampInt(get("NANOCLAW_CONCURRENCY", ""), 1, 1, 4),
 		HistoryTurns:  24,
-		// Loop every request through self-review (the looper thesis: a cheap
-		// model run N times beats one expensive shot). Default 2 (draft + one
-		// critique) — 5 was too slow on a texting surface (research-heavy turns
-		// ran ~8 min). NANOCLAW_PASSES, falls back to NANOCLAW_DIVE_PASSES; 1-8.
-		Passes:        clampInt(firstNonEmpty(get("NANOCLAW_PASSES", ""), get("NANOCLAW_DIVE_PASSES", "")), 2, 1, 8),
+		// Normal turns answer ONCE — looping-by-default made every reply feel
+		// slow on a texting surface. The looper play lives in /dive, which
+		// runs a bigger tool budget + self-review passes on request.
+		Passes:        clampInt(get("NANOCLAW_PASSES", ""), 1, 1, 8),
+		DiveToolIters: 32,
+		DivePasses:    clampInt(get("NANOCLAW_DIVE_PASSES", ""), 2, 1, 8),
 		BraveKey:      get("BRAVE_API_KEY", ""),
 		TalkValue:     clampFloat(get("NANOCLAW_TALK_VALUE", ""), 0.3, 0, 1),
 		Learning:      get("NANOCLAW_LEARNING", "on") != "off",

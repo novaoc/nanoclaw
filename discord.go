@@ -47,10 +47,20 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 	return b, nil
 }
 
-// Slash commands — just /grok (the OAuth login can't work as a chat message;
-// everything else the old commands did is reachable by just asking Vela).
+// Slash commands — /dive (the deep loop) and /grok (the OAuth login can't
+// work as a chat message). Everything else is reachable by just asking Vela.
 func appCommands() []*discordgo.ApplicationCommand {
 	return []*discordgo.ApplicationCommand{
+		{
+			Name:        "dive",
+			Description: "Deep loop on a task or research question — goal, iterate, self-review",
+			Options: []*discordgo.ApplicationCommandOption{{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "task",
+				Description: "What to dive on (a build task, a research question, a mockup)",
+				Required:    true,
+			}},
+		},
 		{
 			Name:        "grok",
 			Description: "Connect a SuperGrok / X Premium sub for image+video gen (admins only)",
@@ -160,9 +170,61 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	if i.Type != discordgo.InteractionApplicationCommand {
 		return
 	}
-	if i.ApplicationCommandData().Name == "grok" {
+	switch i.ApplicationCommandData().Name {
+	case "grok":
 		b.onGrokCommand(s, i)
+	case "dive":
+		b.onDiveCommand(s, i)
 	}
+}
+
+// onDiveCommand runs the deep loop: bigger tool budget + self-review passes.
+// Dives queue on the same semaphore as messages, so they respect the same OOM
+// guard — unbounded /dive spam would pile up goroutines like a message flood.
+func (b *Bot) onDiveCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	task := i.ApplicationCommandData().Options[0].StringValue()
+	author, authorID := interactionUser(i)
+	if atomic.LoadInt32(&b.draining) != 0 {
+		ephemeral(s, i, "🔌 I'm restarting for an update — try the dive again in a minute.")
+		return
+	}
+	if atomic.LoadInt32(&b.pending) >= maxPending {
+		ephemeral(s, i, "🚫 I'm at my queue limit right now — try the dive again in a minute.")
+		return
+	}
+	atomic.AddInt32(&b.pending, 1)
+	// dives run long — defer now, follow up when the loop lands
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	})
+	go func() {
+		defer atomic.AddInt32(&b.pending, -1)
+		b.locks <- struct{}{}
+		defer func() { <-b.locks }()
+		reply := b.agent.DiveTurn(Turn{ChannelID: i.ChannelID, GuildID: i.GuildID, AuthorID: authorID, Author: author}, task)
+		chunks := splitMessage("🌀 **dive**: "+task+"\n\n"+reply.Text, 1990)
+		for n, chunk := range chunks {
+			params := &discordgo.WebhookParams{Content: chunk}
+			if n == len(chunks)-1 {
+				for _, p := range reply.Artifacts {
+					f, err := os.Open(p)
+					if err != nil {
+						continue
+					}
+					defer f.Close()
+					params.Files = append(params.Files, &discordgo.File{Name: artifactName(p), Reader: f})
+				}
+			}
+			if _, err := s.FollowupMessageCreate(i.Interaction, true, params); err != nil {
+				// interaction tokens die after 15 min — a dive queued behind long
+				// turns can outlive one. Don't swallow the finished work: post the
+				// rest as a normal channel message instead.
+				log.Printf("dive followup: %v — falling back to a channel message", err)
+				b.send(i.ChannelID, nil, Reply{Text: strings.Join(chunks[n:], "\n"), Artifacts: reply.Artifacts})
+				return
+			}
+		}
+	}()
 }
 
 func (b *Bot) Start() error { return b.session.Open() }

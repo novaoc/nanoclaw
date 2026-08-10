@@ -442,10 +442,16 @@ func (a *Agent) HandleTurn(t Turn, content string) Reply {
 	return a.run(t, content, a.cfg.MaxToolIters, a.cfg.Passes)
 }
 
-// Dive is kept as an internal alias (the /dive command was removed — looping is
-// now the default for every turn). Used by the eval harness and tests.
+// DiveTurn is the /dive deep loop: a doubled tool budget and self-review
+// passes (cfg.DivePasses). Normal turns answer once; this is where the looper
+// play lives now.
+func (a *Agent) DiveTurn(t Turn, task string) Reply {
+	return a.run(t, task, a.cfg.DiveToolIters, a.cfg.DivePasses)
+}
+
+// Dive is the string-args convenience used by the eval harness and tests.
 func (a *Agent) Dive(channelID, authorID, author, task string) Reply {
-	return a.HandleTurn(Turn{ChannelID: channelID, AuthorID: authorID, Author: author}, task)
+	return a.DiveTurn(Turn{ChannelID: channelID, AuthorID: authorID, Author: author}, task)
 }
 
 func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {

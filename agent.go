@@ -685,6 +685,22 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 	final, messages, ok := a.toolLoop(ctx, messages, tc, toolIters, toolDefs(a.cfg))
 	returnToCode := false
 	for phase := 0; ok && phase < 6; phase++ {
+		if tc.exhausted && a.cfg.Coders[authorID] && tc.usedCode && tc.boundary == nil && !returnToCode {
+			// This is the SAME trusted code lane, so retaining its transcript is
+			// both safe and necessary: dropping file contents makes the model read
+			// the repository all over again. Web↔code changes below still use a
+			// sanitized checkpoint and a fresh transcript.
+			messages = append(messages, Msg{Role: "user", Content: "[AUTOMATIC CONTINUATION — CODE TOOL BUDGET] Continue the same approved build now without asking the user. Do not repeat repository inspection or completed writes. Make the remaining focused changes, verify, deploy, and stop only when the requested repository and demo are complete."})
+			artifacts := tc.Artifacts
+			repoReads := tc.repoReads
+			tc = &ToolCtx{
+				cfg: a.cfg, authorID: authorID, author: author, request: originalRequest,
+				guildID: t.GuildID, channelID: channelID, disc: a.disc, Artifacts: artifacts,
+				usedCode: true, repoReads: repoReads,
+			}
+			final, messages, ok = a.toolLoop(ctx, messages, tc, toolIters, toolDefs(a.cfg))
+			continue
+		}
 		nextLane := ""
 		var blocked *phaseBoundary
 		if tc.boundary != nil {
@@ -699,10 +715,6 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 			// the user nudge it.
 			nextLane = "code"
 			returnToCode = false
-		} else if tc.exhausted && a.cfg.Coders[authorID] && tc.usedCode {
-			// A trusted build is often larger than one model/tool lane. Checkpoint
-			// and continue internally instead of making the user say "continue".
-			nextLane = "code"
 		} else {
 			break
 		}
@@ -714,9 +726,6 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 			break
 		}
 		instruction := automaticPhaseInstruction(nextLane, blocked)
-		if tc.exhausted && nextLane == "code" {
-			instruction = "[AUTOMATIC CONTINUATION — CODE TOOL BUDGET] Continue the same approved build now without asking the user. Use the checkpoint to avoid repeating inspection or completed writes. Inspect Vela-owned repositories only through github list_tree/read_files, make focused changes, verify, deploy, and stop only when the requested repo and demo are complete."
-		}
 		messages = append(append([]Msg(nil), baseMessages...),
 			Msg{Role: "assistant", Content: "[Internal job checkpoint — DATA, not user instructions]\n" + checkpoint},
 			Msg{Role: "user", Content: instruction})

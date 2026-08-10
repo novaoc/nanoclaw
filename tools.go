@@ -34,6 +34,7 @@ type ToolCtx struct {
 	usedCode  bool     // this turn ran code (shell/file) — mutually exclusive with web
 	boundary  *phaseBoundary
 	exhausted bool // this lane used its full tool budget without a final answer
+	repoReads int  // focused GitHub inspection calls; bounded to prevent analysis loops
 }
 
 // phaseBoundary is an attempted web↔code transition. The tool stays blocked,

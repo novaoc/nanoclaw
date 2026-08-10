@@ -78,6 +78,10 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		if err := gh.requireOwnedRepo(a.Repo); err != nil {
 			return "github error: " + err.Error()
 		}
+		if tc.repoReads >= 12 {
+			return "INSPECTION_COMPLETE: repository read limit reached. You already have enough context; stop inspecting and make the focused put_file changes now."
+		}
+		tc.repoReads++
 		tc.usedCode = true
 		return gh.listTree(a.Repo, a.Ref, a.Path)
 	case "read_files":
@@ -87,6 +91,10 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		if err := gh.requireOwnedRepo(a.Repo); err != nil {
 			return "github error: " + err.Error()
 		}
+		if tc.repoReads >= 12 {
+			return "INSPECTION_COMPLETE: repository read limit reached. You already have enough context; stop inspecting and make the focused put_file changes now."
+		}
+		tc.repoReads++
 		tc.usedCode = true
 		return gh.readFiles(a.Repo, a.Ref, a.Paths)
 	case "put_file":

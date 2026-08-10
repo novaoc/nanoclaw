@@ -131,13 +131,14 @@ func toolDefs(cfg *Config) []ToolDef {
 				"create_repo {name, description?} — legacy/non-app repository action; refused when the Rails framework is configured; "+
 				"list_tree {repo, ref?, path?} — inspect Vela's own repository in one call; optional path filters by prefix; "+
 				"read_files {repo, paths:[up to 3 paths], ref?} — read focused files from Vela's own repository; use this instead of shell/curl and read only files you will change; "+
-				"put_file {repo, path, content, message?, branch?} — writes/commits a file (repo is 'name' for Vela's own or 'owner/name'); "+
+				"put_file {repo, path, content, message?, branch?} — REPLACES THE ENTIRE FILE and commits it (never send a fragment; read existing files first; repo is 'name' for Vela's own or 'owner/name'); "+
+				"delete_file {repo, path, message?, branch?} — deletes one file from a Vela-owned repository without shell/curl; "+
 				"open_pr {repo:'owner/name', title, head, base?, body?} — head is 'branch' (same repo) or 'forkowner:branch' (from a fork); "+
 				"fork {repo:'owner/name'}; "+
 				"enable_pages {repo} — legacy static publishing, never completion for an app request. "+
 				"TO DEPLOY AN APP: create_rails_app → focused put_file changes → verify_repo → deploy_repo. Never substitute standalone HTML, Node, Python, Go, or PHP. "+
 				"To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
-			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|list_tree|read_files|put_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
+			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|list_tree|read_files|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
 	if cfg.SandboxURL != "" && cfg.SandboxToken != "" && cfg.SandboxSecret != "" { // holodeck demo hosting
 		defs = append(defs, mk("deploy_demo",

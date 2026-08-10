@@ -103,6 +103,15 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		}
 		tc.usedCode = true
 		return gh.putFile(a.Repo, a.Path, a.Content, a.Message, a.Branch)
+	case "delete_file":
+		if a.Repo == "" || a.Path == "" {
+			return "github error: delete_file needs repo and path"
+		}
+		if err := gh.requireOwnedRepo(a.Repo); err != nil {
+			return "github error: " + err.Error()
+		}
+		tc.usedCode = true
+		return gh.deleteFile(a.Repo, a.Path, a.Message, a.Branch)
 	case "open_pr":
 		if a.Repo == "" || a.Title == "" || a.Head == "" {
 			return "github error: open_pr needs repo ('owner/name'), title, and head"
@@ -122,7 +131,7 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		tc.usedCode = true
 		return gh.enablePages(a.Repo)
 	}
-	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|list_tree|read_files|put_file|open_pr|fork|enable_pages)"
+	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|list_tree|read_files|put_file|delete_file|open_pr|fork|enable_pages)"
 }
 
 type ghClient struct {
@@ -555,6 +564,51 @@ func (g *ghClient) putFile(repo, path, content, message, branch string) string {
 		url, _ = c["html_url"].(string)
 	}
 	return fmt.Sprintf("committed %s to %s/%s — %s", path, owner, repo, url)
+}
+
+// deleteFile removes one known file from a repository owned by Vela. It uses
+// GitHub's contents API so the model never needs to construct authenticated
+// curl commands in the shell.
+func (g *ghClient) deleteFile(repo, path, message, branch string) string {
+	owner, name, err := g.resolveRepo(repo)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	if path == "" || len(path) > 250 || strings.HasPrefix(path, "/") ||
+		filepath.ToSlash(filepath.Clean(path)) != path || strings.ContainsRune(path, 0) {
+		return "github error: invalid path"
+	}
+	q := ""
+	if branch != "" {
+		q = "?ref=" + url.QueryEscape(branch)
+	}
+	current, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s/contents/%s%s", owner, name, ghEsc(path), q), nil)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	if st >= 400 {
+		return "couldn't find file to delete — " + ghErr(current, st)
+	}
+	sha, _ := current["sha"].(string)
+	if sha == "" {
+		return "github error: GitHub did not return the file SHA"
+	}
+	if message == "" {
+		message = "remove " + path
+	}
+	payload := map[string]any{"message": message, "sha": sha}
+	if branch != "" {
+		payload["branch"] = branch
+	}
+	result, st, err := g.do("DELETE", fmt.Sprintf("/repos/%s/%s/contents/%s", owner, name, ghEsc(path)), payload)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	if st >= 400 {
+		return "couldn't delete file — " + ghErr(result, st)
+	}
+	return fmt.Sprintf("deleted %s from %s/%s", path, owner, name)
 }
 
 // enablePages turns on GitHub Pages for a repo (deploy-from-branch on the

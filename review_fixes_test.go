@@ -184,6 +184,9 @@ func TestRailsIsAFirstClassBuildTarget(t *testing.T) {
 		"Never use live keys in a",
 		"run verify_repo",
 		"deploy that exact commit",
+		"replace every template-facing identity",
+		"Never ship Railsfastbase placeholder branding",
+		"put_file action replaces the ENTIRE target file",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("Rails build guidance missing %q", want)
@@ -213,6 +216,7 @@ func TestRailsIsAFirstClassBuildTarget(t *testing.T) {
 func TestSelfIntroductionCoversTheCurrentKitHonestly(t *testing.T) {
 	for _, want := range []string{
 		"named for the Vela pulsar",
+		"MIT-licensed RailsFast foundations",
 		"Every repo you create on request is public and forkable",
 		"Stripe-ready",
 		"preview payment sandboxes and production credentials are",

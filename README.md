@@ -224,6 +224,16 @@ accessible component states, adaptive compact/medium/expanded/large/
 extra-large layouts, minimum 48×48 CSS-pixel targets, keyboard/focus support,
 browser zoom, and reduced-motion handling. Apps may establish their own brand
 through token overrides without discarding those behavioral guarantees.
+Before deployment Vela replaces inherited template identity, navigation,
+metadata, manifest, logo, and footer with the requested product's branding;
+template placeholder branding is never considered complete. The foundation
+also bundles Ruby 4 CSV support so catalog/feed imports do not require a risky
+downstream Gemfile rewrite.
+
+GitHub file writes are deliberately explicit: `put_file` replaces a complete
+file rather than applying a patch, and `delete_file` removes one file through
+the authenticated API. Vela is instructed to read before replacing and never
+send Gemfile or lockfile fragments.
 
 `verify_repo` runs the Docker `test` target and final-image compile;
 `deploy_repo` refuses changed, expired, or unverified source. Stripe sandbox

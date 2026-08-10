@@ -80,6 +80,9 @@ func TestRailsTemplateActionCreatesPublicAppsWithoutExposingTemplate(t *testing.
 	if !strings.Contains(description, "create_rails_app") || !strings.Contains(description, "REQUIRED FIRST ACTION") || !strings.Contains(description, "ALWAYS-PUBLIC") {
 		t.Fatal("GitHub tool does not enforce the public Rails application path")
 	}
+	if !strings.Contains(description, "REPLACES THE ENTIRE FILE") || !strings.Contains(description, "delete_file") {
+		t.Fatal("GitHub tool does not explain safe full-file writes and deletion")
+	}
 	if strings.Contains(description, cfg.RailsTemplate) {
 		t.Fatal("private foundation repository leaked into the model-facing tool description")
 	}

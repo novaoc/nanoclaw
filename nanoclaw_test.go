@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -114,6 +115,64 @@ func TestAgentToolBudget(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(r.Text), "ask me to continue") {
 		t.Fatalf("must not dead-end with 'ask me to continue': %q", r.Text)
+	}
+}
+
+func TestAgentRetriesEmptyTruncatedResponse(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		calls++
+		if calls == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":""}}]}`))
+			return
+		}
+		last := req.Messages[len(req.Messages)-1]
+		if !strings.Contains(last.Content, "one small scaffold/repository tool call") {
+			t.Errorf("missing compact retry instruction: %q", last.Content)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"recovered in the same turn"}}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := testCfg(t)
+	cfg.DeepseekURL = srv.URL
+	reply := NewAgent(cfg).Handle("empty-retry", "u1", "wren", "build the approved app")
+	if reply.Text != "recovered in the same turn" || calls != 2 {
+		t.Fatalf("empty response was not recovered: reply=%q calls=%d", reply.Text, calls)
+	}
+}
+
+func TestLLMPreservesFinishReasonForDiagnostics(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":""}}]}`))
+	}))
+	defer srv.Close()
+	cfg := testCfg(t)
+	cfg.DeepseekURL = srv.URL
+	msg, err := NewLLM(cfg).Chat(context.Background(), []Msg{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.FinishReason != "length" {
+		t.Fatalf("finish reason = %q, want length", msg.FinishReason)
+	}
+}
+
+func TestAgentDoesNotMisreportRepeatedEmptyResponsesAsToolLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":""}}]}`))
+	}))
+	defer srv.Close()
+	cfg := testCfg(t)
+	cfg.DeepseekURL = srv.URL
+	reply := NewAgent(cfg).Handle("empty-stop", "u1", "wren", "build the approved app")
+	if strings.Contains(strings.ToLower(reply.Text), "tool limit") {
+		t.Fatalf("repeated empty responses were misreported as tool use: %q", reply.Text)
+	}
+	if !strings.Contains(reply.Text, "three empty or truncated responses") {
+		t.Fatalf("unexpected failure explanation: %q", reply.Text)
 	}
 }
 

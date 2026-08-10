@@ -50,14 +50,17 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 	if gh == nil {
 		return "github isn't configured on this instance (no token)."
 	}
-	tc.usedCode = true // only once past the gates — a REFUSED call ran nothing
 	log.Printf("github action=%s by=%s repo=%.60q name=%.40q path=%.60q",
 		a.Action, tc.authorID, a.Repo, a.Name, a.Path)
 	switch a.Action {
 	case "create_repo":
+		if tc.cfg.RailsTemplate != "" {
+			return "github error: Vela applications are Rails-only on this instance; use create_rails_app so the private production framework and Material Design contract are preserved"
+		}
 		if a.Name == "" {
 			return "github error: create_repo needs a name"
 		}
+		tc.usedCode = true
 		return gh.createRepo(a.Name, a.Description)
 	case "create_rails_app":
 		if a.Name == "" {
@@ -66,26 +69,31 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		if tc.cfg.RailsTemplate == "" {
 			return "the private Vela Rails foundation isn't configured on this instance"
 		}
+		tc.usedCode = true
 		return gh.createFromTemplate(tc.cfg.RailsTemplate, a.Name, a.Description)
 	case "put_file":
 		if a.Repo == "" || a.Path == "" {
 			return "github error: put_file needs repo and path"
 		}
+		tc.usedCode = true
 		return gh.putFile(a.Repo, a.Path, a.Content, a.Message, a.Branch)
 	case "open_pr":
 		if a.Repo == "" || a.Title == "" || a.Head == "" {
 			return "github error: open_pr needs repo ('owner/name'), title, and head"
 		}
+		tc.usedCode = true
 		return gh.openPR(a.Repo, a.Title, a.Head, a.Base, a.Body)
 	case "fork":
 		if a.Repo == "" {
 			return "github error: fork needs repo ('owner/name')"
 		}
+		tc.usedCode = true
 		return gh.fork(a.Repo)
 	case "enable_pages":
 		if a.Repo == "" {
 			return "github error: enable_pages needs repo"
 		}
+		tc.usedCode = true
 		return gh.enablePages(a.Repo)
 	}
 	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|put_file|open_pr|fork|enable_pages)"

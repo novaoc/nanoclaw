@@ -22,6 +22,9 @@ import (
 // came from Vela's own pipeline and refuse anything else.
 
 func (tc *ToolCtx) deployDemo(a toolArgs) string {
+	if tc.cfg.RailsTemplate != "" {
+		return "deploy error: Vela applications are Rails-only; push the Rails repository, pass verify_repo, then deploy_repo with the exact receipt"
+	}
 	if tc.cfg.SandboxURL == "" || tc.cfg.SandboxToken == "" || tc.cfg.SandboxSecret == "" {
 		return "demo hosting isn't fully configured on this instance (NANOCLAW_SANDBOX_URL/TOKEN/SECRET)."
 	}

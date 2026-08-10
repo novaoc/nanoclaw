@@ -183,9 +183,9 @@ narrow it.
 > → creates `Velaoc/tcg-price-alerts`, commits the files, links them
 
 **Live demos — the holodeck.** Vela ships to her own sandbox: ask her to
-"make me X and put it online" and she builds it, pushes the code to a public
-repo, and deploys a live copy to `https://<app>.demo.holode.xyz/`. Holodeck
-serves both static bundles and real Dockerized applications. Container apps
+"make me X and put it online" and she builds a Ruby on Rails app from her
+private framework, pushes the code to a public repo, verifies it, and deploys
+the exact tested commit to `https://<app>.demo.holode.xyz/`. Container apps
 run with memory/CPU/process caps, dropped capabilities, no-new-privileges, and
 no general internet egress. The whole deck wipes **daily at 3AM Mexico City**;
 the public repo is the permanent, forkable copy. GitHub Pages (`enable_pages`)
@@ -211,13 +211,19 @@ write code, run it, install libraries, and push to her own GitHub — a shell +
 `write_file`/`read_file` in a persistent workspace, `git` authenticated by
 `GITHUB_TOKEN` (her account).
 
-Vela can build Ruby on Rails applications from her private production
+Vela builds applications only in Ruby on Rails from her private production
 foundation. It includes PostgreSQL-oriented production checks, a
 server-authoritative storefront and Stripe Checkout/webhook foundation, and
 Google/GitHub OAuth linking that does not merge accounts merely because an
 email address matches. These are secure starting contracts, not a claim that
 tax, shipping, inventory, fraud policy, or a merchant's production credentials
 have already been configured.
+
+Material Design 3 is the default interface contract: semantic design tokens,
+accessible component states, adaptive compact/medium/expanded/large/
+extra-large layouts, minimum 48×48 CSS-pixel targets, keyboard/focus support,
+browser zoom, and reduced-motion handling. Apps may establish their own brand
+through token overrides without discarding those behavioral guarantees.
 
 `verify_repo` runs the Docker `test` target and final-image compile;
 `deploy_repo` refuses changed, expired, or unverified source. Stripe sandbox

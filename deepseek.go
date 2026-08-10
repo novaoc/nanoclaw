@@ -18,6 +18,9 @@ type Msg struct {
 	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// Response metadata is useful for diagnosing empty/truncated generations,
+	// but must never be echoed back as part of the chat transcript.
+	FinishReason string `json:"-"`
 }
 
 type ToolCall struct {
@@ -71,7 +74,8 @@ type visionRequest struct {
 
 type chatResponse struct {
 	Choices []struct {
-		Message Msg `json:"message"`
+		Message      Msg    `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Error *struct {
 		Message string `json:"message"`
@@ -155,7 +159,9 @@ func (l *LLM) post(ctx context.Context, body []byte) (*Msg, error) {
 		if len(out.Choices) == 0 {
 			return nil, fmt.Errorf("empty response (%d)", resp.StatusCode)
 		}
-		return &out.Choices[0].Message, nil
+		choice := &out.Choices[0]
+		choice.Message.FinishReason = choice.FinishReason
+		return &choice.Message, nil
 	}
 	return nil, fmt.Errorf("provider unavailable after retries: %w", lastErr)
 }

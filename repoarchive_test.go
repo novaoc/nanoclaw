@@ -77,10 +77,30 @@ func TestRailsTemplateActionCreatesPublicAppsWithoutExposingTemplate(t *testing.
 			description = d.Function.Description
 		}
 	}
-	if !strings.Contains(description, "create_rails_app") || strings.Count(description, "ALWAYS-PUBLIC") < 2 {
-		t.Fatal("GitHub tool does not enforce public repositories for regular and Rails apps")
+	if !strings.Contains(description, "create_rails_app") || !strings.Contains(description, "REQUIRED FIRST ACTION") || !strings.Contains(description, "ALWAYS-PUBLIC") {
+		t.Fatal("GitHub tool does not enforce the public Rails application path")
 	}
 	if strings.Contains(description, cfg.RailsTemplate) {
 		t.Fatal("private foundation repository leaked into the model-facing tool description")
+	}
+}
+
+func TestRailsTemplateBlocksNonRailsApplicationPaths(t *testing.T) {
+	cfg := testCfg(t)
+	cfg.GitHubToken = "not-used"
+	cfg.RailsTemplate = "private-owner/private-foundation"
+	cfg.SandboxURL = "https://demo.example"
+	cfg.SandboxToken = "not-used"
+	cfg.SandboxSecret = "not-used"
+
+	tc := &ToolCtx{cfg: cfg, authorID: "coder"}
+	if out := tc.runGithub(toolArgs{Action: "create_repo", Name: "static-app"}); !strings.Contains(out, "Rails-only") {
+		t.Fatalf("generic app repository was not refused: %s", out)
+	}
+	if out := tc.deployDemo(toolArgs{Name: "static-app", Files: []demoFile{{Path: "index.html", Content: "hi"}}}); !strings.Contains(out, "Rails-only") {
+		t.Fatalf("static app deployment was not refused: %s", out)
+	}
+	if tc.usedCode {
+		t.Fatal("refused non-Rails paths must not mark code as executed")
 	}
 }

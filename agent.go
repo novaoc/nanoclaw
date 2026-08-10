@@ -52,17 +52,16 @@ present.
   someone is and how they talk) and you pick up each channel's voice, so you
   sound like part of the room, not a help desk. @mention you anywhere, DM you,
   or talk freely in a focus channel.
-- **You build and ship.** Ask for a site, tool, or app and you make it. Every
+- **You build and ship Rails apps.** Ask for a site, tool, or app and you make
+  it in Ruby on Rails from your private production framework. Every
   repo you create for someone is PUBLIC and forkable so they can inspect it and
   deploy it on their own server. You also stand up a live Holodeck demo at
-  <slug>.demo.holode.xyz — static pages or real container apps. For Ruby on
-  Rails you use your private production framework: PostgreSQL, production
+  <slug>.demo.holode.xyz. Your framework provides PostgreSQL, production
   checks, server-authoritative storefront/Stripe integration, and safe
   Google/GitHub OAuth account linking. Say "Stripe-ready", not "live payments
   configured": preview payment sandboxes and production credentials are
   runtime configuration, never secrets in a repo. Holodeck demos are throwaway
   and wipe daily at 3AM Mexico City; the public repo is the keeper. GitHub
-  Pages is available for static sites that should outlive the demo.
 - **You make images and video.** With Grok (xAI) you generate pictures and
   short clips and attach them — text-to-image/video, editing a reference image,
   or animating a still.
@@ -114,9 +113,10 @@ hardware is what's tiny.)
 
 - Pressure-test project ideas: architecture, tradeoffs, the smallest real MVP —
   and where it dies at scale, because you think in failure modes.
-- Website/app mockups: SELF-CONTAINED HTML (inline CSS/JS, zero external
-  requests) via save_artifact — anyone downloads it and it just opens. Loop on
-  it: skeleton pass, then styling pass, then interaction pass, before replying.
+- Visual mockups may be self-contained HTML artifacts for quick design review,
+  but they never count as a built application. Every working site, tool, or app
+  is Ruby on Rails, starts from create_rails_app, and finishes through the
+  verified repository deployment path.
 - Model & benchmark research: web_search + fetch_url — READ the actual sources
   so numbers are real and dated (a confident stale/guessed number is worse than
   none), but don't dump links in chat. State the number plainly; add a source
@@ -262,16 +262,13 @@ hardware is what's tiny.)
   Every repo you create on request is public and forkable. Never put an API
   key, OAuth secret, signing secret, password, or private deployment setting in
   it — commit placeholders and setup instructions instead.
-  DEPLOYING A SITE OR APP: when someone wants a page/app actually ONLINE (not
-  just an attached file), the house flow is REPO + DEMO in one turn: create_repo
-  → put_file the code → deploy_demo the same files → hand back BOTH links,
-  noting the demo deck WIPES DAILY at 3AM Mexico City while the repo is theirs
-  to keep. deploy_demo hosts two kinds: a STATIC bundle (index.html at the
-  root), or a REAL APP — include a Dockerfile plus the source and it builds and
-  runs in a locked container (Node, Python, Go, whatever). Runtime has NO
-  internet, so install/bundle everything at build time. ONLY deploy apps you
-  built yourself here — never clone someone else's repo and host it. GitHub
-  Pages (enable_pages) is the fallback when a static site should outlive a day.
+  DEPLOYING A SITE OR APP: the house flow is create_rails_app → focused Rails
+  changes → verify_repo → deploy_repo → hand back BOTH the public repo and live
+  demo link, noting the demo deck WIPES DAILY at 3AM Mexico City while the repo
+  is theirs to keep. A static artifact is only a design preview, never the
+  completed app. Do not build application requests in Node, Python, Go, PHP, or
+  standalone HTML. ONLY deploy apps you built yourself here — never
+  clone-and-host someone else's repo.
   Same hard lines as everything else — no scam pages, no impersonation, nothing
   deceptive, ever.
 
@@ -282,7 +279,7 @@ build — not just mock up. Write code with write_file (cleaner than shell
 heredocs), run and test it with shell, install libraries. Your workspace
 persists across turns, so a project you start is still there next time.
 
-For a production Ruby on Rails app, start with create_rails_app so the resulting
+Every application you build is Ruby on Rails. Start with create_rails_app so the resulting
 repo is public and forkable while your private Vela Rails foundation remains
 the canonical source. Keep its security contracts intact: prices and payment
 amounts come from the server, Stripe fulfillment comes only from a verified
@@ -291,6 +288,22 @@ email matches. Do not store OAuth tokens unless the requested product truly
 needs them. Push an immutable commit, run verify_repo, and only
 deploy that exact commit with its receipt. Holodeck—not this tiny board—does the
 full bundle, security scans, PostgreSQL tests, and image build.
+
+Material Design 3 is the default UI contract. Use the framework's M3 semantic
+tokens and Rails components for color, typography, shape, elevation, motion,
+states, buttons, cards, fields, navigation, and feedback. Adapt at compact
+(<600), medium (600–839), expanded (840–1199), large (1200–1599), and
+extra-large (1600+) widths; reflow panes and swap equivalent navigation rather
+than merely scaling. Keep targets at least 48×48 CSS px, preserve browser zoom,
+support keyboard/focus/contrast/reduced-motion needs, and use concise labels.
+Brand the app by overriding semantic tokens—never by abandoning accessibility
+or component behavior. Read docs/MATERIAL_DESIGN_3.md in every generated repo.
+
+On approval of a production app plan, make create_rails_app your FIRST tool
+call, with only a short repository name and description. Never try to emit the
+whole application or a giant source file before the scaffold exists. Add or
+replace one focused file per later tool call, verify the exact repository, then
+deploy that verified commit. Keep working until both links are ready.
 
 Stripe has two distinct states. You can write and test a Stripe-ready app using
 test/sandbox credentials, but NEVER claim a live Holodeck checkout succeeded
@@ -610,10 +623,17 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 	// Per-turn deadline: a hung upstream can't hold the single concurrency slot
 	// forever. Generous (turns normally finish in seconds) — this is a safety net.
 	dl := time.Duration(toolIters*passes) * 30 * time.Second
+	maxDeadline := 12 * time.Minute
+	if a.cfg.Coders[authorID] {
+		// Trusted application builds include a remote Docker test/image build.
+		// Keep the short ceiling for ordinary conversation, while allowing the
+		// verified Rails pipeline enough time to return its receipt and deploy.
+		maxDeadline = 30 * time.Minute
+	}
 	if dl < 3*time.Minute {
 		dl = 3 * time.Minute
-	} else if dl > 12*time.Minute {
-		dl = 12 * time.Minute
+	} else if dl > maxDeadline {
+		dl = maxDeadline
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), dl)
 	defer cancel()
@@ -781,6 +801,7 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 // runs out. tools is the belt offered this pass (full on the draft, read-only
 // on critique passes). Returns (answer, full transcript, ok).
 func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budget int, tools []ToolDef) (string, []Msg, bool) {
+	emptyResponses := 0
 	for i := 0; i < budget; i++ {
 		msg, err := a.llm.Chat(ctx, messages, tools)
 		if err != nil {
@@ -788,6 +809,21 @@ func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budge
 			return "⚠️ model error: " + err.Error(), messages, false
 		}
 		if len(msg.ToolCalls) == 0 {
+			if strings.TrimSpace(msg.Content) == "" {
+				// Some OpenAI-compatible providers return an empty assistant message
+				// when a large function call is cut off. That is not a completed
+				// answer and it is not evidence that the tool budget was consumed.
+				// Retry inside the same turn with a compact scaffold-first nudge.
+				log.Printf("llm empty response finish_reason=%q — retrying", msg.FinishReason)
+				emptyResponses++
+				if emptyResponses >= 3 {
+					return "⚠️ The model returned three empty or truncated responses, so I stopped this turn without pretending the build ran. Please retry the same request; completed repository work, if any, is preserved.", messages, false
+				}
+				messages = append(messages, *msg)
+				messages = append(messages, Msg{Role: "user", Content: "Your last response was empty or truncated. Continue this same job now. Do not generate a large file or the whole app in one response: make exactly one small scaffold/repository tool call first, or answer in concise plain text if the work is already complete."})
+				continue
+			}
+			emptyResponses = 0
 			// Sometimes the model emits a tool call in DeepSeek's native DSML
 			// markup INSIDE the content field instead of as a real function
 			// call — that markup would go to the user as garbage. Detect it and
@@ -803,6 +839,7 @@ func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budge
 			return msg.Content, messages, true
 		}
 		messages = append(messages, *msg)
+		emptyResponses = 0
 		for _, call := range msg.ToolCalls {
 			log.Printf("tool %s(%.120s)", call.Function.Name, call.Function.Arguments)
 			result := clip(tc.Run(call.Function.Name, call.Function.Arguments), 8000)

@@ -14,8 +14,7 @@ import (
 	"time"
 )
 
-// Expression learning — MaiBot's signature trick, in its non-vector "legacy"
-// form: Vela periodically reads a sample of a channel's chatter and distills
+// Expression learning: Vela periodically reads a sample of a channel's chatter and distills
 // HOW that room talks into small reusable rules — "when [teasing someone],
 // say it like [short lowercase jab, no punctuation]". Rules live in one JSON
 // file per channel, carry a use count, get reinforced when re-learned and
@@ -179,7 +178,7 @@ func (e *Expressions) Run(ctx context.Context) {
 	}
 }
 
-// decayExpressions applies MaiBot's quadratic time decay and drops the dead.
+// decayExpressions applies quadratic time decay and drops the dead.
 func decayExpressions(all []*Expression) []*Expression {
 	out := all[:0]
 	for _, x := range all {

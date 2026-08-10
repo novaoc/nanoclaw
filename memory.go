@@ -12,9 +12,9 @@ import (
 	"unicode/utf8"
 )
 
-// Persistence, MimiClaw-style but on a 128 GB microSD instead of 16 MB
-// flash: per-channel conversation history (JSON files) and one shared
-// MEMORY.md of durable notes, loaded into every system prompt.
+// Persistence, all plain files on the 128 GB microSD: per-channel
+// conversation history (JSON files) and one shared MEMORY.md of durable
+// notes, loaded into every system prompt.
 
 var memMu sync.Mutex
 

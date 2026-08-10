@@ -10,9 +10,8 @@ import (
 	"time"
 )
 
-// Group presence — the MaiBot lesson (0.6–0.8 era willingness model): a bot
-// feels alive in a group not because of what it says but because of WHEN it
-// chooses to say nothing. Vela sees every message in a guild channel, scores
+// Group presence — the willingness model: a bot feels alive in a group not
+// because of what it says but because of WHEN it chooses to say nothing. Vela sees every message in a guild channel, scores
 // how interesting it is (all local math — no API call for skipped messages),
 // and accumulates per-channel "willingness". Only when willingness clears the
 // bar does a real agent turn run — and silence is the default outcome of
@@ -93,8 +92,8 @@ func (s *Social) Observe(ch, authorID, author, content string, decide bool) bool
 	if !decide || s.cfg.TalkValue <= 0 {
 		return false // recorded for context/learning; no chime-in decision here
 	}
-	// Exponential no-action backoff (MaiBot 1.x reply_timing): once she's
-	// decided to stay quiet, don't even reconsider for a while.
+	// Exponential no-action backoff: once she's decided to stay quiet,
+	// don't even reconsider for a while.
 	if now.Before(st.nextEval) {
 		return false
 	}
@@ -110,9 +109,8 @@ func (s *Social) Observe(ch, authorID, author, content string, decide bool) bool
 }
 
 // interest scores a message locally: a small length term (log-scaled), plus a
-// boost when it touches topics Vela has long-term memories about — the
-// memory-activation idea from MaiBot's hippocampus, done with token overlap
-// instead of a graph.
+// boost when it touches topics Vela has long-term memories about —
+// memory activation done with token overlap instead of a graph.
 func (s *Social) interest(content string) float64 {
 	v := 0.01 + 0.04*math.Log10(float64(len(content))+1)/3
 	words := s.memoryWords()

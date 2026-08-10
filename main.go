@@ -1,4 +1,4 @@
-// nanoclaw — a MimiClaw-style pocket agent for the LicheeRV Nano.
+// nanoclaw — a pocket AI agent for the LicheeRV Nano.
 //
 // One static Go binary: Discord gateway in, DeepSeek agent loop with tools
 // (web search, page fetch, artifacts, persistent memory), everything stored

@@ -47,8 +47,9 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 	return b, nil
 }
 
-// Slash commands — /dive (the deep loop) and /grok (the OAuth login can't
-// work as a chat message). Everything else is reachable by just asking Vela.
+// Slash commands — /dive (the deep loop), /reset (restart a channel's
+// context), and /grok (the OAuth login can't work as a chat message).
+// Everything else is reachable by just asking Vela.
 func appCommands() []*discordgo.ApplicationCommand {
 	return []*discordgo.ApplicationCommand{
 		{
@@ -94,9 +95,9 @@ func (b *Bot) registerCommands(s *discordgo.Session, guildID string) {
 
 func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 	// Vela's commands are guild-scoped, so any GLOBAL command on this
-	// application is a squatter from other software that used the same bot
-	// token (a Hermes gateway once registered 49 of them). Clear the global
-	// set so /reasoning, /fast & co. don't haunt the command picker.
+	// application is a squatter left behind by other software that once
+	// used the same bot token. Clear the global set so stray commands
+	// don't haunt the command picker.
 	if _, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", nil); err != nil {
 		log.Printf("clear global commands: %v", err)
 	}
@@ -371,7 +372,7 @@ func (b *Bot) send(channelID string, ref *discordgo.MessageReference, r Reply) {
 	if text == "" {
 		text = "(no reply)"
 	}
-	// Human pacing (the MaiBot response-splitter): a short conversational
+	// Human pacing: a short conversational
 	// reply with several sentences goes out as a few separate messages with a
 	// typing beat between them — a person texting, not a bot filing a report.
 	// Anything with attachments, code, or real length uses the plain path.

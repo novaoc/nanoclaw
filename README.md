@@ -6,12 +6,11 @@
 
 <p align="center"><em>Small star, cheap passes, gap closing, never done — <a href="LOGO.md">the mark</a>.</em></p>
 
-A [MimiClaw](https://github.com/memovai/mimiclaw)-style pocket AI agent — but
-where MimiClaw squeezes pure C onto a $5 ESP32-S3, nanoclaw rides a
-**LicheeRV Nano** (RISC-V, 256 MB RAM, real Linux) with a 128 GB microSD:
-one 6.6 MB static Go binary, **Discord** in, **DeepSeek** agent loop inside,
-tools + memory on the SD card. Plug into USB power and it serves your whole
-server, 24/7.
+A pocket AI agent that lives on a **LicheeRV Nano** — a RISC-V board smaller
+than a credit card (256 MB RAM, real Linux) with a 128 GB microSD: one ~8 MB
+static Go binary, **Discord** in, **DeepSeek** agent loop inside, tools +
+memory on the SD card. Plug into USB power and it serves your whole server,
+24/7.
 
 Focused on **AI development and agentic engineering**: ask it in Discord to
 mock up a website (it attaches a self-contained HTML file), pressure-test a
@@ -49,8 +48,7 @@ reply + attachments ◄─ 2000-char splitting ◄─┘  per-channel history on
 - **Sees images**: an attached picture (in the message or the one it replies to)
   is read by a vision model and folded into the turn — snap a card, get its price.
 - Per-channel conversation history and one shared long-term memory file,
-  both plain files on the microSD (this is the 128 GB doing MimiClaw's
-  16 MB-flash job with room for a lifetime of artifacts).
+  both plain files on the microSD — room for a lifetime of artifacts.
 - **One turn at a time** (requests queue, with an ⏳ react so waiters know) and a
   180 MB memory cap — tuned for the Nano's RAM. `NANOCLAW_CONCURRENCY` to raise it.
 
@@ -95,9 +93,8 @@ requirement, so you can dev on a laptop with the same env file.
 
 ### Living in the group (2.0)
 
-The 2.0 social layer borrows the mechanics that make
-[MaiBot](https://github.com/Mai-with-u/MaiBot) feel alive in group chats,
-rebuilt flat-file-sized for the Nano:
+The 2.0 social layer is what makes Vela feel like a member of the server
+rather than a vending machine — built flat-file-sized for the Nano:
 
 - **Willingness, not triggers.** Vela reads every message and scores it
   locally (length, whether it touches topics she has memories about,

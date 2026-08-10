@@ -12,8 +12,7 @@ import (
 	"time"
 )
 
-// Person impressions — MaiBot's relationship system, flat-file sized. Vela
-// keeps a small evolving note about each person she's seen talk: a paragraph
+// Person impressions, flat-file sized: Vela keeps a small evolving note about each person she's seen talk: a paragraph
 // impression, a one-line short form (injected into her prompt when answering
 // that person), and the nickname she privately calls them. Messages accrue
 // per person; once enough pile up (impressionAfter), one cheap LLM call

@@ -184,6 +184,14 @@ func (s *Social) Sample(ch string, n int) []ambientMsg {
 	return msgs[:n]
 }
 
+// Reset drops a channel's transcript ring and willingness — a fresh read of
+// the room after a /reset.
+func (s *Social) Reset(ch string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.byCh, ch)
+}
+
 // Channels lists channels with at least n recorded messages (learner targets).
 func (s *Social) Channels(n int) []string {
 	s.mu.Lock()

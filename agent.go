@@ -415,6 +415,14 @@ func (a *Agent) Observe(ch, authorID, author, content string, decide bool) bool 
 	return a.social.Observe(ch, authorID, author, content, decide)
 }
 
+// ResetChannel forgets a channel's conversation: per-channel history plus the
+// ambient transcript/willingness. Long-term memory, impressions, and learned
+// expressions survive — this is "start the conversation over", not amnesia.
+func (a *Agent) ResetChannel(ch string) {
+	a.hist.Clear(ch)
+	a.social.Reset(ch)
+}
+
 // StartLearning runs the background expression learner until ctx ends.
 func (a *Agent) StartLearning(ctx context.Context) {
 	if a.cfg.Learning {
@@ -487,6 +495,7 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 			sys += "\n\n" + b
 		}
 	}
+	rawContent := content
 	if t.Ambient {
 		// Unprompted chime-in: show the chatter being joined (history only has
 		// turns Vela was part of), demand brevity, and make silence an easy out.
@@ -507,11 +516,15 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 		// Silence is the default outcome of every ambient failure path — a
 		// model error, an empty answer, or an explicit PASS all mean "say
 		// nothing", never an error message nobody asked for. A declined
-		// chime-in isn't recorded as a turn either.
+		// chime-in isn't recorded as a turn either. The turn is recorded with
+		// the RAW message — the chime-in scaffolding must never persist into
+		// history where later turns would read it as something someone said.
 		if !ok || isPass(final) || strings.TrimSpace(final) == "" {
 			return Reply{}
 		}
-		a.hist.Append(channelID, userMsg, Msg{Role: "assistant", Content: final})
+		a.hist.Append(channelID,
+			Msg{Role: "user", Content: fmt.Sprintf("%s: %s", author, rawContent)},
+			Msg{Role: "assistant", Content: final})
 		return Reply{Text: final, Artifacts: tc.Artifacts}
 	}
 	if !ok {

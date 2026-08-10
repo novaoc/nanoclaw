@@ -103,6 +103,15 @@ func (h *History) Get(ch string) []Msg {
 	return append([]Msg(nil), m...)
 }
 
+// Clear wipes one channel's conversation history (memory + disk) — the /reset
+// command. Long-term MEMORY.md is untouched.
+func (h *History) Clear(ch string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.byCh, ch)
+	_ = os.Remove(h.path(ch))
+}
+
 // Append stores a user/assistant exchange (tool traffic is not persisted —
 // it can be huge and the model re-derives it cheaply).
 func (h *History) Append(ch string, exchange ...Msg) {

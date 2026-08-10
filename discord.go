@@ -62,6 +62,10 @@ func appCommands() []*discordgo.ApplicationCommand {
 			}},
 		},
 		{
+			Name:        "reset",
+			Description: "Restart Vela's context in this channel (long-term memory is kept)",
+		},
+		{
 			Name:        "grok",
 			Description: "Connect a SuperGrok / X Premium sub for image+video gen (admins only)",
 			Options: []*discordgo.ApplicationCommandOption{{
@@ -175,6 +179,15 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.onGrokCommand(s, i)
 	case "dive":
 		b.onDiveCommand(s, i)
+	case "reset":
+		// Per-channel conversational state only — MEMORY.md, impressions, and
+		// learned expressions survive. Open to everyone: it's the "she's gone
+		// off the rails, start over" button, and it can't destroy anything.
+		b.agent.ResetChannel(i.ChannelID)
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{Content: "🧠 Fresh start — I've let go of this channel's conversation. (Long-term memory intact.)"},
+		})
 	}
 }
 

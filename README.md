@@ -154,11 +154,13 @@ Auth is either a **SuperGrok / X Premium+ subscription** — an admin runs
 pay-as-you-go `XAI_API_KEY` from console.x.ai. `NANOCLAW_IMAGE_USERS`
 restricts who can spend; blank opens it to the whole server.
 
-The only slash commands are `/dive` (the deep loop) and `/grok`
-(login/status/logout) — everything else is just conversation. (The old
-`/memory`, `/keys`, and `/focus` commands were removed; command registration
-bulk-overwrites, so stale commands from older builds disappear from the guild
-on their own.)
+The only slash commands are `/dive` (the deep loop), `/reset` (restart her
+context in the current channel — conversation history and the ambient
+transcript are dropped; long-term memory, impressions, and learned
+expressions are kept), and `/grok` (login/status/logout) — everything else is
+just conversation. (The old `/memory`, `/keys`, and `/focus` commands were
+removed; command registration bulk-overwrites, so stale commands from older
+builds disappear from the guild on their own.)
 
 ### Repos & PRs for everyone (github tool)
 

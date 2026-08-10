@@ -122,3 +122,18 @@ func TestClampFloat(t *testing.T) {
 		t.Fatal("clampFloat wrong")
 	}
 }
+
+// A /reset must wipe channel history and the ambient ring — and nothing else.
+func TestResetChannel(t *testing.T) {
+	cfg := testCfg(t)
+	a := NewAgent(cfg)
+	a.hist.Append("ch", Msg{Role: "user", Content: "aregus: hi"}, Msg{Role: "assistant", Content: "hey"})
+	a.social.Observe("ch", "u1", "alice", "hello", false)
+	a.ResetChannel("ch")
+	if got := a.hist.Get("ch"); len(got) != 0 {
+		t.Fatalf("history survived reset: %v", got)
+	}
+	if got := a.social.Recent("ch", 10); got != "" {
+		t.Fatalf("transcript survived reset: %q", got)
+	}
+}

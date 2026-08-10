@@ -136,7 +136,7 @@ func toolDefs(cfg *Config) []ToolDef {
 		if len(names) > 0 {
 			desc += "Currently held (values hidden, injected into shell as these env vars): " + strings.Join(names, ", ") + "."
 		} else {
-			desc += "None are set right now — a coder adds them with /keys."
+			desc += "None are set right now — they're added on the box, not in chat."
 		}
 		defs = append(defs, mk("clear_secrets", desc, `{"type":"object","properties":{}}`))
 	}
@@ -172,17 +172,20 @@ func critiqueTools(cfg *Config, haveArtifact bool) []ToolDef {
 }
 
 type toolArgs struct {
-	Query, URL, Name, Content, Note, Command, Path, Game, Set          string
+	Query, URL, Name, Content, Note, Command, Path, Game, Set           string
 	Action, Description, Repo, Message, Branch, Title, Head, Base, Body string
-	Kind, Number, Symbol, Source                                       string
-	User, Reason, Channel, Thread, Duration                            string // moderation + forum
-	Prompt, ImageURL                                                   string // xAI image/video gen
-	Days                                                               int
-	Seconds                                                            int // slowmode seconds
-	N                                                                  int // image count
-	Private                                                            bool
-	Benchmarks                                                         []string
-	Models                                                             []benchModel
+	Kind, Number, Symbol, Source                                        string
+	User, Reason, Channel, Thread, Duration                             string // moderation + forum
+	Prompt                                                              string // xAI image/video gen
+	// snake_case keys need explicit tags — Go's JSON matching ignores case but
+	// NOT underscores, so without this "image_url" silently unmarshals to "".
+	ImageURL   string `json:"image_url"`
+	Days       int
+	Seconds    int // slowmode seconds
+	N          int // image count
+	Private    bool
+	Benchmarks []string
+	Models     []benchModel
 }
 
 // unwrapArgs undoes DeepSeek's occasional double-wrapping of tool arguments,

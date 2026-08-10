@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -75,5 +76,50 @@ func TestVideoURLExtraction(t *testing.T) {
 	vs.Video.URL = "https://x/b.mp4"
 	if vs.videoURL() != "https://x/b.mp4" {
 		t.Error("nested video.url")
+	}
+}
+
+// The live API reports status "done" (not the documented "completed") — a
+// regression here means every video "times out" after rendering fine.
+func TestVideoOutcomeDoneStatus(t *testing.T) {
+	vs := videoStatus{Status: "done"}
+	vs.Video.URL = "https://vidgen.x.ai/clip.mp4"
+	u, msg, terminal := videoOutcome(vs)
+	if !terminal || u != "https://vidgen.x.ai/clip.mp4" || msg != "" {
+		t.Fatalf("done status: url=%q msg=%q terminal=%v", u, msg, terminal)
+	}
+	// unknown status but a URL already present — take it rather than time out
+	vs2 := videoStatus{Status: "finalizing"}
+	vs2.Video.URL = "https://vidgen.x.ai/late.mp4"
+	if u, _, terminal := videoOutcome(vs2); !terminal || u == "" {
+		t.Fatal("unknown status with URL should be terminal")
+	}
+	// still rendering — keep polling
+	if _, _, terminal := videoOutcome(videoStatus{Status: "generating"}); terminal {
+		t.Fatal("generating should not be terminal")
+	}
+	if _, msg, terminal := videoOutcome(videoStatus{Status: "failed", Error: "moderation"}); !terminal || msg == "" {
+		t.Fatal("failed should be terminal with a message")
+	}
+}
+
+// image_url is snake_case: without an explicit json tag it silently
+// unmarshals to "" (Go matches case-insensitively but not across underscores).
+func TestToolArgsImageURLUnmarshal(t *testing.T) {
+	var a toolArgs
+	if err := json.Unmarshal([]byte(`{"prompt":"a cat","image_url":"https://cdn.discordapp.com/x.png"}`), &a); err != nil {
+		t.Fatal(err)
+	}
+	if a.ImageURL != "https://cdn.discordapp.com/x.png" {
+		t.Fatalf("image_url not unmarshaled: %q", a.ImageURL)
+	}
+}
+
+// data: reference images must pass through inlineImage untouched.
+func TestInlineImageDataURLPassthrough(t *testing.T) {
+	tc := &ToolCtx{cfg: testCfg(t)}
+	in := "data:image/png;base64,AAAA"
+	if got := tc.inlineImage(in); got != in {
+		t.Fatalf("data URL rewritten: %q", got)
 	}
 }

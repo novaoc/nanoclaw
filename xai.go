@@ -83,6 +83,9 @@ func (tc *ToolCtx) generateImage(a toolArgs) string {
 	if !tc.cfg.XAIEnabled() {
 		return "image gen isn't set up yet — an admin needs to run /grok login (SuperGrok/X Premium) or set an XAI_API_KEY."
 	}
+	if tc.cfg.xaiBearer() == "" {
+		return "the Grok subscription login has expired — an admin needs to run /grok login again."
+	}
 	if !tc.cfg.ImageAllowed(tc.authorID) {
 		return "REFUSED: image generation is limited to an allowlist here (NANOCLAW_IMAGE_USERS), and this user isn't on it."
 	}
@@ -100,11 +103,16 @@ func (tc *ToolCtx) generateImage(a toolArgs) string {
 	payload := map[string]any{
 		"model": tc.cfg.XAIImageModel, "prompt": prompt, "n": n, "response_format": "url",
 	}
-	if a.ImageURL != "" { // reference/edit image
-		payload["image_url"] = a.ImageURL
+	// A reference image goes to the EDITS endpoint, as an images[] entry —
+	// /images/generations ignores it. Inlined as a data: URL because xAI can't
+	// reliably fetch signed/expiring hosts (Discord CDN).
+	endpoint := "/images/generations"
+	if a.ImageURL != "" {
+		endpoint = "/images/edits"
+		payload["images"] = []map[string]any{{"type": "image_url", "url": tc.inlineImage(a.ImageURL)}}
 	}
-	log.Printf("xai image by=%s n=%d prompt=%.80q", tc.authorID, n, prompt)
-	raw, st, err := xaiPost(tc.cfg, "/images/generations", payload)
+	log.Printf("xai image by=%s n=%d edit=%v prompt=%.80q", tc.authorID, n, a.ImageURL != "", prompt)
+	raw, st, err := xaiPost(tc.cfg, endpoint, payload)
 	if err != nil {
 		return "image gen error: " + err.Error()
 	}
@@ -117,7 +125,9 @@ func (tc *ToolCtx) generateImage(a toolArgs) string {
 	}
 	saved := 0
 	for i, d := range out.Data {
-		name := fmt.Sprintf("grok-image-%d.png", i+1)
+		// no extension — saveMedia picks the real one from the content type
+		// (the live API returns JPEGs, not PNGs)
+		name := fmt.Sprintf("grok-image-%d", i+1)
 		if d.URL != "" {
 			if s := tc.attachRemoteMedia(d.URL, name); strings.HasPrefix(s, "saved:") {
 				saved++
@@ -138,7 +148,7 @@ func (tc *ToolCtx) generateImage(a toolArgs) string {
 
 // videoStatus is the poll response for an async video job.
 type videoStatus struct {
-	Status    string `json:"status"` // queued|processing|completed|failed
+	Status    string `json:"status"` // queued|pending|generating|done|failed (live API says "done", not "completed")
 	RequestID string `json:"request_id"`
 	URL       string `json:"url"`
 	Video     struct {
@@ -158,6 +168,9 @@ func (tc *ToolCtx) generateVideo(a toolArgs) string {
 	if !tc.cfg.XAIEnabled() {
 		return "video gen isn't set up yet — an admin needs to run /grok login (SuperGrok/X Premium) or set an XAI_API_KEY."
 	}
+	if tc.cfg.xaiBearer() == "" {
+		return "the Grok subscription login has expired — an admin needs to run /grok login again."
+	}
 	if !tc.cfg.ImageAllowed(tc.authorID) {
 		return "REFUSED: video generation is limited to an allowlist here (NANOCLAW_IMAGE_USERS), and this user isn't on it."
 	}
@@ -170,8 +183,8 @@ func (tc *ToolCtx) generateVideo(a toolArgs) string {
 		dur = "5"
 	}
 	payload := map[string]any{"model": tc.cfg.XAIVideoModel, "prompt": prompt, "duration": dur}
-	if a.ImageURL != "" {
-		payload["image_url"] = a.ImageURL
+	if a.ImageURL != "" { // animate a still: the API takes image:{url}, inlined for signed hosts
+		payload["image"] = map[string]any{"url": tc.inlineImage(a.ImageURL)}
 	}
 	log.Printf("xai video by=%s dur=%s prompt=%.80q", tc.authorID, dur, prompt)
 	raw, st, err := xaiPost(tc.cfg, "/videos/generations", payload)
@@ -192,7 +205,7 @@ func (tc *ToolCtx) generateVideo(a toolArgs) string {
 	if perr != "" {
 		return perr
 	}
-	if s := tc.attachRemoteMedia(url, "grok-video.mp4"); strings.HasPrefix(s, "saved:") {
+	if s := tc.attachRemoteMedia(url, "grok-video"); strings.HasPrefix(s, "saved:") {
 		return "Generated the video — attached to your reply."
 	}
 	// too big to attach (Discord cap) — hand over the link instead
@@ -227,19 +240,57 @@ func (tc *ToolCtx) pollVideo(ctx context.Context, id string) (string, string) {
 		if json.Unmarshal(raw, &vs) != nil {
 			continue
 		}
-		switch strings.ToLower(vs.Status) {
-		case "completed", "succeeded", "success":
-			if u := vs.videoURL(); u != "" {
-				return u, ""
-			}
-			return "", "video completed but no URL came back."
-		case "failed", "error":
-			if vs.Error != "" {
-				return "", "video gen failed: " + vs.Error
-			}
-			return "", "video gen failed."
+		if u, msg, terminal := videoOutcome(vs); terminal {
+			return u, msg
 		}
 	}
+}
+
+// videoOutcome decides whether a poll response is terminal. The live API
+// reports "done" on success (not the "completed" the docs implied), so accept
+// the known spellings AND any response that already carries a video URL.
+func videoOutcome(vs videoStatus) (url, errMsg string, terminal bool) {
+	switch strings.ToLower(vs.Status) {
+	case "done", "completed", "succeeded", "success":
+		if u := vs.videoURL(); u != "" {
+			return u, "", true
+		}
+		return "", "video completed but no URL came back.", true
+	case "failed", "error", "rejected", "expired":
+		if vs.Error != "" {
+			return "", "video gen failed: " + vs.Error, true
+		}
+		return "", "video gen failed.", true
+	}
+	if u := vs.videoURL(); u != "" { // unknown status but the video exists — take it
+		return u, "", true
+	}
+	return "", "", false
+}
+
+// inlineImage fetches a reference image (SSRF-guarded, images only, ≤8MB) and
+// returns it as a data: URL — xAI can't fetch signed/expiring URLs like the
+// Discord CDN's, so the bytes ride along in the request instead. Already-inline
+// data: URLs pass through; on any fetch problem the original URL is returned
+// and the API gets to try (and report) it itself.
+func (tc *ToolCtx) inlineImage(u string) string {
+	if strings.HasPrefix(u, "data:") {
+		return u
+	}
+	resp, err := xaiMediaClient.Get(u)
+	if err != nil {
+		return u
+	}
+	defer resp.Body.Close()
+	ct := strings.TrimSpace(strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0])
+	if resp.StatusCode >= 400 || !strings.HasPrefix(ct, "image/") {
+		return u
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil || len(data) == 0 {
+		return u
+	}
+	return "data:" + ct + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 
 // attachRemoteMedia fetches a generated media URL (SSRF-guarded) and attaches

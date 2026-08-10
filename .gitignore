@@ -4,4 +4,3 @@ nanoclaw-eval-riscv64
 nanoclaw.env
 data/
 *.log
-holodeck-linux-amd64

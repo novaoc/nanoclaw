@@ -63,6 +63,16 @@ func appCommands() []*discordgo.ApplicationCommand {
 			}},
 		},
 		{
+			Name:        "request",
+			Description: "Open a request (build something, make a video, …) as a post in the requests forum",
+			Options: []*discordgo.ApplicationCommandOption{{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "goal",
+				Description: "What you want made — a site, a tool, an image/video, a plan",
+				Required:    true,
+			}},
+		},
+		{
 			Name:        "reset",
 			Description: "Restart Vela's context in this channel (long-term memory is kept)",
 		},
@@ -168,6 +178,46 @@ func (b *Bot) onGrokCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 	}
 }
 
+// onRequestCommand handles /request: frame the ask as a concrete goal (one
+// cheap model call), open a post in the requests forum, and point the
+// requester at the thread to continue the work there.
+func (b *Bot) onRequestCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	task := strings.TrimSpace(i.ApplicationCommandData().Options[0].StringValue())
+	author, authorID := interactionUser(i)
+	if task == "" {
+		ephemeral(s, i, "Tell me what you want made — `/request goal: a landing page for …`")
+		return
+	}
+	if i.GuildID == "" {
+		ephemeral(s, i, "Requests need the server (the post goes in the requests forum) — run it there, not in a DM.")
+		return
+	}
+	fid, fname, _, err := b.ResolveChannel(i.GuildID, b.cfg.RequestsForum)
+	if err != nil {
+		ephemeral(s, i, "I couldn't find a requests forum in this server — an admin needs to create a forum channel named \""+b.cfg.RequestsForum+"\" (or set NANOCLAW_REQUESTS_FORUM).")
+		return
+	}
+	// Framing takes a model call — defer so the interaction doesn't time out.
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	})
+	go func() {
+		title, body := b.agent.FrameRequest(author, task)
+		body += "\n\n_requested by <@" + authorID + ">_"
+		url, err := b.CreateForumPost(fid, title, body)
+		if err != nil {
+			_, _ = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+				Content: "Couldn't open the post in #" + fname + " (is it a forum channel I can post in?): " + err.Error(),
+			})
+			return
+		}
+		log.Printf("request by=%s forum=%s title=%.60q", authorID, fname, title)
+		_, _ = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Content: "📌 Opened your request in #" + fname + ": **" + title + "**\n" + url + "\n\nContinue there — @mention me in the thread with details or next steps and I'll keep working it.",
+		})
+	}()
+}
+
 func interactionUser(i *discordgo.InteractionCreate) (name, id string) {
 	if i.Member != nil && i.Member.User != nil {
 		return i.Member.User.Username, i.Member.User.ID
@@ -187,6 +237,8 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.onGrokCommand(s, i)
 	case "dive":
 		b.onDiveCommand(s, i)
+	case "request":
+		b.onRequestCommand(s, i)
 	case "reset":
 		// Per-channel conversational state only — MEMORY.md, impressions, and
 		// learned expressions survive. Open to everyone: it's the "she's gone

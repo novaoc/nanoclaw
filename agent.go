@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -427,6 +428,37 @@ func (a *Agent) Observe(ch, authorID, author, content string, decide bool) bool 
 		a.people.Note(authorID, author, content)
 	}
 	return a.social.Observe(ch, authorID, author, content, decide)
+}
+
+// FrameRequest turns a raw /request into a forum post: a short title and a
+// body that states it as a concrete GOAL with acceptance criteria, in Vela's
+// voice, and invites the requester to continue in the thread. One cheap
+// tool-less call; on any failure it falls back to a plain framing so the
+// command never dead-ends.
+func (a *Agent) FrameRequest(author, task string) (title, body string) {
+	fallbackTitle := clip(strings.TrimSpace(task), 90)
+	fallback := fmt.Sprintf("**Goal:** %s\n\nRequested by %s. Continue in this thread — @mention me with the details, constraints, or the next step and I'll pick it up here.", strings.TrimSpace(task), author)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	prompt := fmt.Sprintf(`You are Vela. %s opened a build/creation request. Turn it into a forum post that SETS A CLEAR GOAL — restate it as one concrete goal with visible acceptance criteria (what "done" looks like), pick the most useful concrete version if it's vague, and close by inviting them to continue in this thread (@mention you with details or the next step). Your texting voice: plain, sharp, no preamble, no markdown headers.
+
+The request: %s
+
+Reply with ONLY this JSON: {"title":"<short title, max 90 chars>","body":"<the post body, a few sentences>"}`, author, task)
+	msg, err := a.llm.Chat(ctx, []Msg{{Role: "user", Content: prompt}}, nil)
+	if err != nil {
+		return fallbackTitle, fallback
+	}
+	var out struct{ Title, Body string }
+	if json.Unmarshal([]byte(extractJSON(msg.Content)), &out) != nil || strings.TrimSpace(out.Body) == "" {
+		return fallbackTitle, fallback
+	}
+	title = clip(strings.TrimSpace(out.Title), 95)
+	if title == "" {
+		title = fallbackTitle
+	}
+	return title, strings.TrimSpace(out.Body)
 }
 
 // ResetChannel forgets a channel's conversation: per-channel history plus the

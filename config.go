@@ -105,6 +105,8 @@ type Config struct {
 	SandboxURL   string // NANOCLAW_SANDBOX_URL — holodeck demo host (e.g. https://demo.holode.xyz)
 	SandboxToken string // NANOCLAW_SANDBOX_TOKEN — holodeck deploy bearer token
 
+	RequestsForum string // NANOCLAW_REQUESTS_FORUM — forum channel /request posts into (name or id)
+
 	Coders     map[string]bool // Discord IDs allowed to run shell/code (root-trust)
 	RepoUsers  map[string]bool // Discord IDs allowed the github API tool; empty = everyone
 	Mods       map[string]bool // Discord IDs allowed moderation (NANOCLAW_MODS); empty = off
@@ -187,6 +189,7 @@ func LoadConfig() (*Config, error) {
 		GitHubToken:   get("GITHUB_TOKEN", ""),
 		GitName:       get("GIT_NAME", "Vela"),
 		GitEmail:      get("GIT_EMAIL", ""),
+		RequestsForum: get("NANOCLAW_REQUESTS_FORUM", "requests"),
 	}
 	if cfg.Workspace == "" {
 		cfg.Workspace = cfg.DataDir + "/workspace"

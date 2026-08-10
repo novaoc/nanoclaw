@@ -175,7 +175,7 @@ Discord-ID list to narrow it.
 "make me X and put it online" and she builds it, pushes the code to a repo,
 AND deploys the same files to `https://<app>.demo.holode.xyz/` — instantly,
 on her own domain. Every demo **self-destructs 7 days after deploy**; the
-repo is the permanent copy. The sandbox (`cmd/holodeck`, one static Go
+repo is the permanent copy. The sandbox ([holodeck](https://github.com/novaoc/holodeck), one static Go
 binary behind Caddy with on-demand TLS) serves static files only — nothing
 deployed there ever executes server-side, per-app subdomains isolate demos
 from each other in the browser, and only hostnames of apps that actually

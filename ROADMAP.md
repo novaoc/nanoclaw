@@ -21,7 +21,7 @@ roughly in order of value-per-complexity on a 256 MB board.
   presence there — shorter backoff, no coin flip for a few minutes — then
   cool down.
 
-- **Holodeck backends.** The demo sandbox (shipped) is static-only by
+- **Holodeck backends.** The demo sandbox ([holodeck](https://github.com/novaoc/holodeck)) is static-only by
   design. If demos ever need a server side, the safe path is per-app
   containers with no network egress and hard CPU/RAM caps — a real project,
   not a tweak. Until then, backends belong in the repo with a README.

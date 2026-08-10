@@ -95,6 +95,15 @@ func toolDefs(cfg *Config) []ToolDef {
 			"Post in a Discord FORUM channel on request. action=post creates a new forum post/thread (needs channel=<forum name or id>, title, body); action=reply adds a message to an existing post/thread (needs thread=<thread id or its title/name>, body). Use when asked to 'post an intro in the introductions forum' or 'reply to that forum post'. Write the content in Vela's voice.",
 			`{"type":"object","properties":{"action":{"type":"string","description":"post|reply"},"channel":{"type":"string","description":"forum channel name or id (for post)"},"title":{"type":"string","description":"post title (for post)"},"thread":{"type":"string","description":"thread id or title (for reply)"},"body":{"type":"string","description":"the message content"}},"required":["action","body"]}`),
 	}
+	if cfg.XAIEnabled() { // Grok image/video generation (needs XAI_API_KEY)
+		defs = append(defs,
+			mk("generate_image",
+				"Generate image(s) with Grok (xAI) and attach them to your reply. Use when asked to 'make/draw/generate a picture/image of ...'. prompt = what to create (be vivid and specific); n = how many (1-4, default 1); optional image_url to use a reference image to edit/riff on. Costs money per image — generate what's asked, don't spam extras.",
+				`{"type":"object","properties":{"prompt":{"type":"string"},"n":{"type":"integer","description":"1-4"},"image_url":{"type":"string","description":"optional reference image to edit/riff on"}},"required":["prompt"]}`),
+			mk("generate_video",
+				"Generate a short video with Grok (xAI) and attach it. Use when asked to 'make/generate a video/clip of ...' or to animate an image. prompt = what happens in the clip; optional image_url to animate a still; duration = seconds as a string (default '5', max '15'). Async — it renders over several seconds. Costs money per second — keep clips short unless asked.",
+				`{"type":"object","properties":{"prompt":{"type":"string"},"image_url":{"type":"string","description":"optional still image to animate"},"duration":{"type":"string","description":"seconds, e.g. '5' (max '15')"}},"required":["prompt"]}`))
+	}
 	if len(cfg.Mods) > 0 { // moderation only when a mod allowlist is configured
 		defs = append(defs, mk("moderate",
 			"Discord moderation — ONLY act on an explicit request from an authorized moderator. action=timeout|kick|ban|delete|slowmode. "+
@@ -139,8 +148,10 @@ type toolArgs struct {
 	Action, Description, Repo, Message, Branch, Title, Head, Base, Body string
 	Kind, Number, Symbol, Source                                       string
 	User, Reason, Channel, Thread, Duration                            string // moderation + forum
+	Prompt, ImageURL                                                   string // xAI image/video gen
 	Days                                                               int
 	Seconds                                                            int // slowmode seconds
+	N                                                                  int // image count
 	Private                                                            bool
 	Benchmarks                                                         []string
 	Models                                                             []benchModel
@@ -183,7 +194,7 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// attach_image counts as web: its bytes never reach the model, but it IS an
 	// arbitrary outbound GET — after a code turn (which can read env/tokens) it
 	// would otherwise be an exfiltration channel via the URL.
-	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart" || name == "attach_image" || name == "model_releases"
+	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart" || name == "attach_image" || name == "model_releases" || name == "generate_image" || name == "generate_video"
 	code := name == "shell" || name == "write_file" || name == "read_file" || name == "github"
 	if web && tc.usedCode {
 		return "REFUSED: web fetch blocked — this turn already ran code or a GitHub write, and untrusted page content must not mix with those. Do the browsing in a separate message."
@@ -228,6 +239,12 @@ func (tc *ToolCtx) Run(name, args string) string {
 		return tc.moderate(a)
 	case "discord_forum":
 		return tc.discordForum(a)
+	case "generate_image":
+		tc.usedWeb = true
+		return tc.generateImage(a)
+	case "generate_video":
+		tc.usedWeb = true
+		return tc.generateVideo(a)
 	// The code handlers set usedCode themselves AFTER their allowlist gates
 	// pass — a REFUSED call ran nothing, so it must not poison the rest of the
 	// turn (blocking every later web tool with "this turn already ran code").

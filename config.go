@@ -65,6 +65,15 @@ func (c *Config) RepoAllowed(uid string) bool {
 	return len(c.RepoUsers) == 0 || c.RepoUsers[uid]
 }
 
+// XAIEnabled reports whether xAI (Grok) image/video generation is available.
+func (c *Config) XAIEnabled() bool { return c.XAIKey != "" }
+
+// ImageAllowed gates the image/video tools. Empty ImageUsers = open to everyone
+// in the server (private-server default); a non-empty list restricts to those IDs.
+func (c *Config) ImageAllowed(uid string) bool {
+	return len(c.ImageUsers) == 0 || c.ImageUsers[uid]
+}
+
 // CodeEnabled reports whether the shell/file tools may run — gated to an
 // explicit coder allowlist (NANOCLAW_CODERS). A shell is root-level trust on
 // the box, so an empty allowlist turns the whole capability off.
@@ -90,6 +99,12 @@ type Config struct {
 	Coders      map[string]bool // Discord IDs allowed to run shell/code (root-trust)
 	RepoUsers   map[string]bool // Discord IDs allowed the github API tool; empty = everyone
 	Mods        map[string]bool // Discord IDs allowed moderation (NANOCLAW_MODS); empty = off
+	ImageUsers  map[string]bool // Discord IDs allowed xAI image/video gen; empty = everyone
+
+	XAIKey        string // XAI_API_KEY (console.x.ai — NOT a SuperGrok sub); "" disables image/video gen
+	XAIURL        string // XAI_API_URL, default https://api.x.ai/v1
+	XAIImageModel string // XAI_IMAGE_MODEL
+	XAIVideoModel string // XAI_VIDEO_MODEL
 	Workspace   string          // where code lives + shell runs
 	GitHubToken string          // GITHUB_TOKEN — enables authenticated push
 	GitName     string          // commit identity (Vela's own account)
@@ -145,6 +160,11 @@ func LoadConfig() (*Config, error) {
 		Coders:        map[string]bool{},
 		RepoUsers:     map[string]bool{},
 		Mods:          map[string]bool{},
+		ImageUsers:    map[string]bool{},
+		XAIKey:        get("XAI_API_KEY", ""),
+		XAIURL:        get("XAI_API_URL", "https://api.x.ai/v1"),
+		XAIImageModel: get("XAI_IMAGE_MODEL", "grok-imagine-image-quality"),
+		XAIVideoModel: get("XAI_VIDEO_MODEL", "grok-imagine-video-1.5"),
 		Workspace:     get("NANOCLAW_WORKSPACE", ""),
 		GitHubToken:   get("GITHUB_TOKEN", ""),
 		GitName:       get("GIT_NAME", "Vela"),
@@ -171,6 +191,11 @@ func LoadConfig() (*Config, error) {
 	for _, id := range strings.Split(get("NANOCLAW_MODS", ""), ",") {
 		if id = strings.TrimSpace(id); id != "" {
 			cfg.Mods[id] = true
+		}
+	}
+	for _, id := range strings.Split(get("NANOCLAW_IMAGE_USERS", ""), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			cfg.ImageUsers[id] = true
 		}
 	}
 	// Deploy-secret store: TTL backstop so a forgotten key doesn't linger.

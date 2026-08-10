@@ -29,6 +29,7 @@ Discord message ──► gateway (discordgo) ──► agent loop (DeepSeek too
                                             │  price_chart  (card/stock/crypto/index → PNG)
                                             │  bench_chart  (LLM benchmark bars → PNG chart)
                                             │  attach_image (post an image)
+                                            │  generate_image/video (xAI Grok, attached)
                                             │  model_releases (new models from Hugging Face)
                                             │  discord_forum(post/reply in a forum channel)
                                             │  moderate     (timeout/kick/ban — mod allowlist)

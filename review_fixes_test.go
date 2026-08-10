@@ -87,3 +87,34 @@ func TestSelfDatedMemory(t *testing.T) {
 		t.Errorf("notes missing: %q", m)
 	}
 }
+
+func TestUnwrapArgs(t *testing.T) {
+	// double-wrapped as a JSON string (the /dive poke-store failure)
+	got := unwrapArgs(`{"arguments":"{\"name\":\"x.html\",\"content\":\"hi\"}"}`)
+	if !strings.Contains(got, `"name":"x.html"`) {
+		t.Errorf("string-wrapped not unwrapped: %q", got)
+	}
+	// double-wrapped as a nested object
+	got = unwrapArgs(`{"arguments":{"name":"x.html","content":"hi"}}`)
+	if !strings.Contains(got, `"name":"x.html"`) {
+		t.Errorf("object-wrapped not unwrapped: %q", got)
+	}
+	// normal args pass through untouched
+	normal := `{"name":"x.html","content":"hi"}`
+	if unwrapArgs(normal) != normal {
+		t.Errorf("normal args altered: %q", unwrapArgs(normal))
+	}
+	// a real single-field arg that isn't the wrapper passes through
+	one := `{"query":"charizard"}`
+	if unwrapArgs(one) != one {
+		t.Errorf("legit single field altered: %q", unwrapArgs(one))
+	}
+}
+
+func TestRunUnwrapsSaveArtifact(t *testing.T) {
+	tc := &ToolCtx{cfg: testCfg(t)}
+	out := tc.Run("save_artifact", `{"arguments":"{\"name\":\"mock.html\",\"content\":\"<h1>hi</h1>\"}"}`)
+	if !strings.Contains(out, "saved") || len(tc.Artifacts) != 1 {
+		t.Fatalf("double-wrapped save_artifact should still save: %q (arts=%d)", out, len(tc.Artifacts))
+	}
+}

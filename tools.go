@@ -146,7 +146,31 @@ type toolArgs struct {
 	Models                                                             []benchModel
 }
 
+// unwrapArgs undoes DeepSeek's occasional double-wrapping of tool arguments,
+// where the real args arrive nested under a lone "arguments" key —
+// {"arguments":"{\"path\":...}"} or {"arguments":{...}} — instead of at the top
+// level. Left unwrapped, every field reads empty and file/artifact tools fail
+// silently (seen killing a /dive's save_artifact). Only unwraps the exact lone-
+// "arguments" shape, so real args that happen to contain an "arguments" field
+// are untouched.
+func unwrapArgs(s string) string {
+	var probe map[string]json.RawMessage
+	if json.Unmarshal([]byte(s), &probe) != nil || len(probe) != 1 {
+		return s
+	}
+	inner, ok := probe["arguments"]
+	if !ok {
+		return s
+	}
+	var asStr string
+	if json.Unmarshal(inner, &asStr) == nil {
+		return asStr // was a JSON string: {"arguments":"{...}"}
+	}
+	return string(inner) // was a nested object: {"arguments":{...}}
+}
+
 func (tc *ToolCtx) Run(name, args string) string {
+	args = unwrapArgs(args)
 	var a toolArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "tool error: bad arguments: " + err.Error()

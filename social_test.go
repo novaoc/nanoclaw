@@ -137,3 +137,13 @@ func TestResetChannel(t *testing.T) {
 		t.Fatalf("transcript survived reset: %q", got)
 	}
 }
+
+// enable_pages validates its args before any network call.
+func TestEnablePagesArgValidation(t *testing.T) {
+	cfg := testCfg(t)
+	cfg.GitHubToken = "test-token"
+	tc := &ToolCtx{cfg: cfg, authorID: "u"}
+	if out := tc.Run("github", `{"action":"enable_pages"}`); !strings.Contains(out, "needs repo") {
+		t.Fatalf("missing-repo not caught: %q", out)
+	}
+}

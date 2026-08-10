@@ -113,11 +113,14 @@ func toolDefs(cfg *Config) []ToolDef {
 	}
 	if cfg.GithubEnabled() { // API only — no shell; gated by NANOCLAW_REPO_USERS (empty = everyone)
 		defs = append(defs, mk("github",
-			"Create and populate GitHub repos and open pull requests via the API, as Vela's own account. This is API-ONLY — nothing runs on the box. Actions: "+
+			"Create and populate GitHub repos, open pull requests, and PUBLISH LIVE WEBSITES via the API, as Vela's own account. This is API-ONLY — nothing runs on the box. Actions: "+
 				"create_repo {name, description?, private?} — makes a repo (with a README); "+
 				"put_file {repo, path, content, message?, branch?} — writes/commits a file (repo is 'name' for Vela's own or 'owner/name'); "+
 				"open_pr {repo:'owner/name', title, head, base?, body?} — head is 'branch' (same repo) or 'forkowner:branch' (from a fork); "+
-				"fork {repo:'owner/name'}. To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
+				"fork {repo:'owner/name'}; "+
+				"enable_pages {repo} — turns on GitHub Pages and returns the live URL. "+
+				"TO DEPLOY A SITE someone asks to put online: create_repo (public) → put_file index.html (self-contained HTML) → enable_pages → give them the live link (takes ~a minute to go live). "+
+				"To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
 			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|put_file|open_pr|fork"},"name":{"type":"string"},"description":{"type":"string"},"private":{"type":"boolean"},"repo":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
 	if cfg.CodeEnabled() { // gated to the coder allowlist (NANOCLAW_CODERS)

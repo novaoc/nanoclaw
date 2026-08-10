@@ -171,6 +171,11 @@ Discord-ID list to narrow it.
 > **@vela** spin up a repo `tcg-price-alerts`, drop in a README and a hello.py
 > → creates `Velaoc/tcg-price-alerts`, commits the files, links them
 
+**Live websites.** She can put a site actually online, not just attach the
+HTML: create repo → commit `index.html` → enable GitHub Pages → hand back the
+live `*.github.io` URL (live in about a minute). "make me a landing page and
+put it online" is a one-message deploy.
+
 To contribute to someone else's repo she forks it, writes to a branch on the
 fork, and opens the PR upstream — all through the API. Every action is
 audit-logged, and it's held to the same per-turn injection guard as code (a

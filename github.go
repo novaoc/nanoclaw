@@ -66,8 +66,13 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 			return "github error: fork needs repo ('owner/name')"
 		}
 		return gh.fork(a.Repo)
+	case "enable_pages":
+		if a.Repo == "" {
+			return "github error: enable_pages needs repo"
+		}
+		return gh.enablePages(a.Repo)
 	}
-	return "github error: unknown action " + a.Action + " (use create_repo|put_file|open_pr|fork)"
+	return "github error: unknown action " + a.Action + " (use create_repo|put_file|open_pr|fork|enable_pages)"
 }
 
 type ghClient struct {
@@ -259,6 +264,57 @@ func (g *ghClient) putFile(repo, path, content, message, branch string) string {
 		url, _ = c["html_url"].(string)
 	}
 	return fmt.Sprintf("committed %s to %s/%s — %s", path, owner, repo, url)
+}
+
+// enablePages turns on GitHub Pages for a repo (deploy-from-branch on the
+// default branch root) and returns the live site URL — the publish step after
+// create_repo + put_file(index.html). Idempotent: already-enabled reports the
+// existing URL.
+func (g *ghClient) enablePages(repo string) string {
+	owner, err := g.login()
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	if strings.Contains(repo, "/") {
+		parts := strings.SplitN(repo, "/", 2)
+		owner, repo = parts[0], parts[1]
+	}
+	info, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s", owner, repo), nil)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	if st >= 400 {
+		return "couldn't read repo — " + ghErr(info, st)
+	}
+	branch, _ := info["default_branch"].(string)
+	if branch == "" {
+		branch = "main"
+	}
+	m, st, err := g.do("POST", fmt.Sprintf("/repos/%s/%s/pages", owner, repo),
+		map[string]any{"source": map[string]any{"branch": branch, "path": "/"}})
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	if st == 409 { // already enabled — fetch and report the live URL
+		cur, st2, _ := g.do("GET", fmt.Sprintf("/repos/%s/%s/pages", owner, repo), nil)
+		if st2 == 200 {
+			if u, _ := cur["html_url"].(string); u != "" {
+				return "Pages was already on — the site is live at " + u
+			}
+		}
+	}
+	if st >= 400 {
+		hint := ""
+		if st == 403 || st == 404 {
+			hint = " (the GitHub token may lack the Pages write permission, or the repo is private — Pages on private repos needs a paid plan)"
+		}
+		return "couldn't enable Pages — " + ghErr(m, st) + hint
+	}
+	u, _ := m["html_url"].(string)
+	if u == "" {
+		u = fmt.Sprintf("https://%s.github.io/%s/", owner, repo)
+	}
+	return fmt.Sprintf("Pages enabled — the site will be live at %s in about a minute (index.html at the repo root is the homepage)", u)
 }
 
 // openPR opens a pull request on repoFull ("owner/name"). head is "branch" for

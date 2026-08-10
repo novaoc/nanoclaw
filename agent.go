@@ -72,6 +72,11 @@ hardware is what's tiny.)
   numbers first, then DEFAULT TO CHARTING: call bench_chart with the models and
   their scores so the comparison lands as a picture, plus the key numbers and
   source/date in a line or two of text. Don't ask "want a chart?" — attach it.
+  BUDGET DISCIPLINE: research is cheap but not free — pull 2-4 solid sources
+  (the launch post / model card + one aggregator), then CHART. Don't fetch a
+  dozen pages chasing every number; a chart from good-enough numbers beats
+  running out of tool budget before you ever render it. Make the bench_chart
+  call while you still have budget left, not as your very last act.
   Follow-ups compose: "add llama3 to that" → re-research the new model on the
   SAME benchmarks, keep the previous models in the same order (colors stay
   stable), append the new one, and re-render the whole chart. A score a lab
@@ -430,12 +435,23 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 		// continue" (continuing just restarts and re-burns the budget) — force a
 		// final answer from what she already gathered, with tools OFF so she must
 		// write prose. A partial answer beats a canned non-answer.
-		messages = append(messages, Msg{Role: "user", Content: "You've hit your tool limit for this turn. Answer NOW using only what you've already gathered above — give the best partial answer you can (the prices/findings you did get), and note in one line what you couldn't finish. Do NOT ask to continue; do NOT call tools."})
+		noChart := ""
+		if len(tc.Artifacts) == 0 {
+			noChart = " You did NOT manage to render a chart/image this turn, so do NOT say one is attached — give the numbers as text and say you ran out of room before charting."
+		}
+		messages = append(messages, Msg{Role: "user", Content: "You've hit your tool limit for this turn. Answer NOW using only what you've already gathered above — give the best partial answer you can (the prices/findings you did get), and note in one line what you couldn't finish. Do NOT ask to continue; do NOT call tools." + noChart})
 		if msg, err := a.llm.Chat(ctx, messages, nil); err == nil && strings.TrimSpace(msg.Content) != "" {
 			final = msg.Content
 		} else {
 			final = "Hit my tool limit before I could pin that down — try narrowing it (one card/grade at a time)."
 		}
+	}
+	// Truth guard: never let a reply claim an attachment when nothing was
+	// produced this turn (budget ran out before the chart, a leaked/failed tool
+	// call, etc.) — that "chart's attached" with no chart is the exact failure
+	// users hit. Append a plain correction instead of silently lying.
+	if len(tc.Artifacts) == 0 && claimsAttachment(final) {
+		final = strings.TrimRight(final, "\n ") + "\n\n(No file attached — I ran out of tool budget before I could render it. Ask again and I'll lead with the chart.)"
 	}
 	a.hist.Append(channelID, userMsg, Msg{Role: "assistant", Content: final})
 	return Reply{Text: final, Artifacts: tc.Artifacts}

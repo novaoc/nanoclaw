@@ -136,7 +136,7 @@ func LoadConfig() (*Config, error) {
 		VisionModel:   get("NANOCLAW_VISION_MODEL", "stepfun/step-3.7-flash"),
 		DataDir:       get("NANOCLAW_DATA", "data"),
 		FocusChannels: map[string]bool{},
-		MaxToolIters:  clampInt(get("NANOCLAW_MAX_ITERS", ""), 12, 4, 40),
+		MaxToolIters:  clampInt(get("NANOCLAW_MAX_ITERS", ""), 20, 4, 40),
 		Concurrency:   clampInt(get("NANOCLAW_CONCURRENCY", ""), 1, 1, 4),
 		HistoryTurns:  24,
 		DiveToolIters: 16,

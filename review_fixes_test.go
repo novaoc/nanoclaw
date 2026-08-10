@@ -118,3 +118,13 @@ func TestRunUnwrapsSaveArtifact(t *testing.T) {
 		t.Fatalf("double-wrapped save_artifact should still save: %q (arts=%d)", out, len(tc.Artifacts))
 	}
 }
+
+func TestAttachmentTruthGuard(t *testing.T) {
+	// the guard lives in run(); test its building block directly
+	if !claimsAttachment("Chart's attached now, for real — Muse Glimmer 30B") {
+		t.Error("should detect an attachment claim")
+	}
+	if claimsAttachment("Bitcoin is at $65k, up 1.6% this month.") {
+		t.Error("plain text wrongly flagged as attachment claim")
+	}
+}

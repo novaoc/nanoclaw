@@ -65,8 +65,18 @@ func (c *Config) RepoAllowed(uid string) bool {
 	return len(c.RepoUsers) == 0 || c.RepoUsers[uid]
 }
 
-// XAIEnabled reports whether xAI (Grok) image/video generation is available.
-func (c *Config) XAIEnabled() bool { return c.XAIKey != "" }
+// XAIEnabled reports whether xAI (Grok) image/video generation is available —
+// via a SuperGrok/X Premium OAuth login OR a pay-as-you-go API key.
+func (c *Config) XAIEnabled() bool { return c.XAIKey != "" || c.Grok.Connected() }
+
+// xaiBearer returns the token to authenticate xAI API calls: the OAuth
+// subscription token if connected (refreshed as needed), else the API key.
+func (c *Config) xaiBearer() string {
+	if t := c.Grok.Token(); t != "" {
+		return t
+	}
+	return c.XAIKey
+}
 
 // ImageAllowed gates the image/video tools. Empty ImageUsers = open to everyone
 // in the server (private-server default); a non-empty list restricts to those IDs.
@@ -92,24 +102,25 @@ type Config struct {
 	MaxToolIters  int
 	Concurrency   int // max turns running at once; 1 = strict queue (RAM-safe on the Nano)
 	HistoryTurns  int
-	DiveToolIters int // /dive gets a bigger tool budget…
-	DivePasses    int // …and N self-review passes (the looper-model play)
+	DiveToolIters int    // /dive gets a bigger tool budget…
+	DivePasses    int    // …and N self-review passes (the looper-model play)
 	BraveKey      string // BRAVE_API_KEY — real search API; falls back to DuckDuckGo scraping
 
-	Coders      map[string]bool // Discord IDs allowed to run shell/code (root-trust)
-	RepoUsers   map[string]bool // Discord IDs allowed the github API tool; empty = everyone
-	Mods        map[string]bool // Discord IDs allowed moderation (NANOCLAW_MODS); empty = off
-	ImageUsers  map[string]bool // Discord IDs allowed xAI image/video gen; empty = everyone
+	Coders     map[string]bool // Discord IDs allowed to run shell/code (root-trust)
+	RepoUsers  map[string]bool // Discord IDs allowed the github API tool; empty = everyone
+	Mods       map[string]bool // Discord IDs allowed moderation (NANOCLAW_MODS); empty = off
+	ImageUsers map[string]bool // Discord IDs allowed xAI image/video gen; empty = everyone
 
-	XAIKey        string // XAI_API_KEY (console.x.ai — NOT a SuperGrok sub); "" disables image/video gen
-	XAIURL        string // XAI_API_URL, default https://api.x.ai/v1
-	XAIImageModel string // XAI_IMAGE_MODEL
-	XAIVideoModel string // XAI_VIDEO_MODEL
-	Workspace   string          // where code lives + shell runs
-	GitHubToken string          // GITHUB_TOKEN — enables authenticated push
-	GitName     string          // commit identity (Vela's own account)
-	GitEmail    string
-	Secrets     *SecretStore // ephemeral deploy-key store (never in prompt/history)
+	XAIKey        string    // XAI_API_KEY (console.x.ai pay-as-you-go); optional if OAuth is used
+	XAIURL        string    // XAI_API_URL, default https://api.x.ai/v1
+	XAIImageModel string    // XAI_IMAGE_MODEL
+	XAIVideoModel string    // XAI_VIDEO_MODEL
+	Grok          *GrokAuth // SuperGrok / X Premium+ OAuth (device-code); set in LoadConfig
+	Workspace     string    // where code lives + shell runs
+	GitHubToken   string    // GITHUB_TOKEN — enables authenticated push
+	GitName       string    // commit identity (Vela's own account)
+	GitEmail      string
+	Secrets       *SecretStore // ephemeral deploy-key store (never in prompt/history)
 }
 
 // LoadConfig reads /etc/nanoclaw.env then ./nanoclaw.env (later wins),
@@ -201,6 +212,7 @@ func LoadConfig() (*Config, error) {
 	// Deploy-secret store: TTL backstop so a forgotten key doesn't linger.
 	ttl := time.Duration(clampInt(get("NANOCLAW_SECRET_TTL_MIN", ""), 120, 1, 1440)) * time.Minute
 	cfg.Secrets = NewSecretStore(cfg.DataDir, ttl)
+	cfg.Grok = NewGrokAuth(cfg.DataDir) // SuperGrok/X Premium OAuth (persisted)
 	// Focus channels persisted at runtime via /focus (merged with the env list).
 	for _, id := range loadFocus(cfg.DataDir) {
 		cfg.FocusChannels[id] = true

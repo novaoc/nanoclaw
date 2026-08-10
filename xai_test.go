@@ -7,10 +7,10 @@ import (
 
 func TestXAIDisabledMessages(t *testing.T) {
 	tc := &ToolCtx{cfg: testCfg(t)} // no XAI key
-	if out := tc.Run("generate_image", `{"prompt":"a cat"}`); !strings.Contains(out, "isn't configured") {
+	if out := tc.Run("generate_image", `{"prompt":"a cat"}`); !strings.Contains(out, "isn't set up") {
 		t.Errorf("image gen without key: %q", out)
 	}
-	if out := tc.Run("generate_video", `{"prompt":"a cat"}`); !strings.Contains(out, "isn't configured") {
+	if out := tc.Run("generate_video", `{"prompt":"a cat"}`); !strings.Contains(out, "isn't set up") {
 		t.Errorf("video gen without key: %q", out)
 	}
 }

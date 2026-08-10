@@ -17,10 +17,11 @@ import (
 
 // xAI (Grok) image + video generation. OpenAI-compatible image endpoint
 // (/v1/images/generations) and an async video endpoint (/v1/videos/generations
-// → poll /v1/videos/{id}). Needs XAI_API_KEY from console.x.ai — a SuperGrok
-// subscription is a consumer plan and does NOT authenticate the API. Generated
-// media is fetched and attached to the reply (bytes go to Discord, never into
-// the model's context), so this isn't an injection vector.
+// → poll /v1/videos/{id}). Auth is either a SuperGrok / X Premium+ subscription
+// via the device-code OAuth flow (see grokauth.go, preferred) or a pay-as-you-
+// go XAI_API_KEY — xaiBearer() picks whichever is present. Generated media is
+// fetched and attached to the reply (bytes go to Discord, never into the
+// model's context), so this isn't an injection vector.
 
 // xaiMediaClient reuses the SSRF-guarded transport but allows longer transfers
 // (a 15s video can take a while to download).
@@ -42,7 +43,7 @@ func xaiPost(cfg *Config, path string, payload any) ([]byte, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header.Set("Authorization", "Bearer "+cfg.XAIKey)
+	req.Header.Set("Authorization", "Bearer "+cfg.xaiBearer())
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := xaiMediaClient.Do(req)
 	if err != nil {
@@ -80,7 +81,7 @@ type imageResp struct {
 
 func (tc *ToolCtx) generateImage(a toolArgs) string {
 	if !tc.cfg.XAIEnabled() {
-		return "image gen isn't configured (no XAI_API_KEY on this instance)."
+		return "image gen isn't set up yet — an admin needs to run /grok login (SuperGrok/X Premium) or set an XAI_API_KEY."
 	}
 	if !tc.cfg.ImageAllowed(tc.authorID) {
 		return "REFUSED: image generation is limited to an allowlist here (NANOCLAW_IMAGE_USERS), and this user isn't on it."
@@ -155,7 +156,7 @@ func (vs videoStatus) videoURL() string {
 
 func (tc *ToolCtx) generateVideo(a toolArgs) string {
 	if !tc.cfg.XAIEnabled() {
-		return "video gen isn't configured (no XAI_API_KEY on this instance)."
+		return "video gen isn't set up yet — an admin needs to run /grok login (SuperGrok/X Premium) or set an XAI_API_KEY."
 	}
 	if !tc.cfg.ImageAllowed(tc.authorID) {
 		return "REFUSED: video generation is limited to an allowlist here (NANOCLAW_IMAGE_USERS), and this user isn't on it."
@@ -206,7 +207,7 @@ func (tc *ToolCtx) pollVideo(ctx context.Context, id string) (string, string) {
 		case <-time.After(4 * time.Second):
 		}
 		req, _ := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(tc.cfg.XAIURL, "/")+"/videos/"+id, nil)
-		req.Header.Set("Authorization", "Bearer "+tc.cfg.XAIKey)
+		req.Header.Set("Authorization", "Bearer "+tc.cfg.xaiBearer())
 		resp, err := xaiMediaClient.Do(req)
 		if err != nil {
 			continue // transient; keep polling within the deadline

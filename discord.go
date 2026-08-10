@@ -91,6 +91,21 @@ func appCommands() []*discordgo.ApplicationCommand {
 			}},
 		},
 		{
+			Name:        "grok",
+			Description: "Connect a SuperGrok / X Premium sub for image+video gen (admins only)",
+			Options: []*discordgo.ApplicationCommandOption{{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "action",
+				Description: "login (get a link to approve), status, or logout",
+				Required:    true,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "login", Value: "login"},
+					{Name: "status", Value: "status"},
+					{Name: "logout", Value: "logout"},
+				},
+			}},
+		},
+		{
 			Name:        "focus",
 			Description: "Toggle this channel for mention-free replies (admins only)",
 			Options: []*discordgo.ApplicationCommandOption{{
@@ -244,6 +259,55 @@ func (b *Bot) onModalSubmit(s *discordgo.Session, i *discordgo.InteractionCreate
 	ephemeral(s, i, fmt.Sprintf("🔐 Stored **%s** (value hidden). It's available to shell as $%s; I'll wipe it when the deploy's done or on `/keys clear`.", stored, stored))
 }
 
+// onGrokCommand drives the xAI device-code OAuth login so Vela can use a
+// SuperGrok / X Premium subscription for image+video gen. Admin-gated (it
+// spends the subscriber's quota). login shows a link to approve, then polls in
+// the background and follows up when connected.
+func (b *Bot) onGrokCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	_, uid := interactionUser(i)
+	if !b.cfg.Coders[uid] {
+		ephemeral(s, i, "That's admin-only (the coder allowlist) — it links a paid subscription.")
+		return
+	}
+	switch i.ApplicationCommandData().Options[0].StringValue() {
+	case "logout":
+		b.cfg.Grok.Clear()
+		ephemeral(s, i, "Disconnected the Grok subscription. Image/video gen is off until you `/grok login` again (or an XAI_API_KEY is set).")
+	case "status":
+		if b.cfg.Grok.Connected() {
+			ephemeral(s, i, "✅ Connected to a Grok subscription — image & video generation are live.")
+		} else if b.cfg.XAIKey != "" {
+			ephemeral(s, i, "Using an XAI_API_KEY (pay-as-you-go). `/grok login` to use a subscription instead.")
+		} else {
+			ephemeral(s, i, "Not connected. `/grok login` to link your SuperGrok / X Premium sub.")
+		}
+	default: // login
+		dc, err := b.cfg.Grok.StartDevice()
+		if err != nil {
+			ephemeral(s, i, "Couldn't start the Grok login: "+err.Error())
+			return
+		}
+		link := dc.VerificationURIComplete
+		msg := "🔗 **Connect your Grok subscription**\nOpen this and approve"
+		if link == "" { // no prefilled link — show the URL + code to type
+			link = dc.VerificationURI
+			msg += fmt.Sprintf(" — enter the code **%s**", dc.UserCode)
+		}
+		msg += ":\n" + link + "\n\nI'll confirm here once you've approved (the link expires in a few minutes)."
+		ephemeral(s, i, msg)
+		go func() {
+			perr := b.cfg.Grok.PollForToken(dc)
+			out := "✅ Connected! Image & video generation are live — ask me to make a picture or a clip."
+			if perr != nil {
+				out = "⚠️ Grok login didn't complete: " + perr.Error()
+			}
+			_, _ = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+				Content: out, Flags: discordgo.MessageFlagsEphemeral,
+			})
+		}()
+	}
+}
+
 // onFocusCommand toggles the current channel for mention-free replies (admins).
 func (b *Bot) onFocusCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	_, uid := interactionUser(i)
@@ -296,6 +360,9 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		return
 	case "focus":
 		b.onFocusCommand(s, i)
+		return
+	case "grok":
+		b.onGrokCommand(s, i)
 		return
 	case "dive":
 	default:
@@ -508,4 +575,3 @@ func splitMessage(s string, max int) []string {
 	}
 	return out
 }
-

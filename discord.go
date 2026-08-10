@@ -93,6 +93,13 @@ func (b *Bot) registerCommands(s *discordgo.Session, guildID string) {
 }
 
 func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
+	// Vela's commands are guild-scoped, so any GLOBAL command on this
+	// application is a squatter from other software that used the same bot
+	// token (a Hermes gateway once registered 49 of them). Clear the global
+	// set so /reasoning, /fast & co. don't haunt the command picker.
+	if _, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", nil); err != nil {
+		log.Printf("clear global commands: %v", err)
+	}
 	for _, g := range r.Guilds {
 		b.registerCommands(s, g.ID)
 	}

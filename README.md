@@ -89,18 +89,32 @@ requirement, so you can dev on a laptop with the same env file.
 
 ## Using it
 
-### /dive — the deep-loop skill
+### The loop — every turn, by default
 
-For anything that deserves more than a quick answer:
+Every request runs the looper protocol: state the goal and acceptance
+criteria, work the tools, then **self-review** — the model re-reads its own
+answer against the criteria and repairs it before you see it
+(`NANOCLAW_PASSES`, default 2; the old `/dive` command is gone because this
+is now just how she works). The economics are the point: a cheap model looped
+twice with a clear goal beats one expensive shot, at a fraction of the cost.
 
-> **/dive** task: compare the latest DeepSeek release against GPT on coding benchmarks — real numbers with dates
+### Image & video generation (Grok)
 
-`/dive` runs the looper protocol: state the goal and acceptance criteria,
-work with a doubled tool budget (16 tool calls), then **self-review** — the
-model re-reads its own answer against the criteria and repairs it before you
-see it (`NANOCLAW_DIVE_PASSES`, default 2). The economics are the point: a
-cheap model looped twice with a clear goal beats one expensive shot, at a
-fraction of the cost.
+Ask her to make a picture or a short clip and she generates it with xAI's
+Grok Imagine and attaches it — images via `generate_image` (with optional
+reference-image editing: attach or link a picture to riff on) and clips via
+`generate_video` (text-to-video, or animate a still; async render, she polls
+until it's done and posts the MP4).
+
+Auth is either a **SuperGrok / X Premium+ subscription** — an admin runs
+`/grok login`, opens the link, approves, no API key at all — or a
+pay-as-you-go `XAI_API_KEY` from console.x.ai. `NANOCLAW_IMAGE_USERS`
+restricts who can spend; blank opens it to the whole server.
+
+`/grok` (login/status/logout) is the **only slash command** — everything else
+is just conversation. (The old `/memory`, `/keys`, and `/focus` commands were
+removed; command registration bulk-overwrites, so stale commands from older
+builds disappear from the guild on their own.)
 
 ### Repos & PRs for everyone (github tool)
 

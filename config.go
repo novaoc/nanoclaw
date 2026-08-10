@@ -10,7 +10,8 @@ import (
 	"time"
 )
 
-// focusPath persists runtime /focus channel choices next to the data dir.
+// focusPath persists runtime focus-channel choices next to the data dir.
+// (The /focus command was removed; the file is still honored if present.)
 func focusPath(dataDir string) string { return filepath.Join(dataDir, "focus-channels.txt") }
 
 func loadFocus(dataDir string) []string {
@@ -25,16 +26,6 @@ func loadFocus(dataDir string) []string {
 		}
 	}
 	return out
-}
-
-func saveFocus(dataDir string, ids map[string]bool) {
-	var b strings.Builder
-	for id, on := range ids {
-		if on {
-			b.WriteString(id + "\n")
-		}
-	}
-	_ = os.WriteFile(focusPath(dataDir), []byte(b.String()), 0o644)
 }
 
 func atoiOr(s string, def int) int {
@@ -178,8 +169,8 @@ func LoadConfig() (*Config, error) {
 		// model run N times beats one expensive shot). Default 2 (draft + one
 		// critique) — 5 was too slow on a texting surface (research-heavy turns
 		// ran ~8 min). NANOCLAW_PASSES, falls back to NANOCLAW_DIVE_PASSES; 1-8.
-		Passes:   clampInt(firstNonEmpty(get("NANOCLAW_PASSES", ""), get("NANOCLAW_DIVE_PASSES", "")), 2, 1, 8),
-		BraveKey: get("BRAVE_API_KEY", ""),
+		Passes:        clampInt(firstNonEmpty(get("NANOCLAW_PASSES", ""), get("NANOCLAW_DIVE_PASSES", "")), 2, 1, 8),
+		BraveKey:      get("BRAVE_API_KEY", ""),
 		Coders:        map[string]bool{},
 		RepoUsers:     map[string]bool{},
 		Mods:          map[string]bool{},
@@ -225,7 +216,7 @@ func LoadConfig() (*Config, error) {
 	ttl := time.Duration(clampInt(get("NANOCLAW_SECRET_TTL_MIN", ""), 120, 1, 1440)) * time.Minute
 	cfg.Secrets = NewSecretStore(cfg.DataDir, ttl)
 	cfg.Grok = NewGrokAuth(cfg.DataDir) // SuperGrok/X Premium OAuth (persisted)
-	// Focus channels persisted at runtime via /focus (merged with the env list).
+	// Focus channels persisted on disk (merged with the env list).
 	for _, id := range loadFocus(cfg.DataDir) {
 		cfg.FocusChannels[id] = true
 	}

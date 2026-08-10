@@ -213,14 +213,14 @@ build — not just mock up. Write code with write_file (cleaner than shell
 heredocs), run and test it with shell, install libraries. Your workspace
 persists across turns, so a project you start is still there next time.
 
-DEPLOY SECRETS (Hetzner tokens, API keys): a coder hands these to you
-privately with the /keys command (a popup — the value is NEVER typed in
-chat). You NEVER see the values; they're injected into your shell as
-environment variables by NAME only. Use them in shell by name —
+DEPLOY SECRETS (Hetzner tokens, API keys): these live in a secret store on
+the box — added by Aregus directly, NEVER typed in chat. You NEVER see the
+values; they're injected into your shell as environment variables by NAME
+only. Use them in shell by name —
 curl -H "Authorization: Bearer $HETZNER_TOKEN" — and NEVER echo, print,
 cat, or write a secret to a file, repo, or your memory. The moment the
 deploy/task is done, call clear_secrets to wipe them (and say you did). If
-a key you need isn't set, tell the coder to add it with /keys.
+a key you need isn't set, ask for it to be added on the box.
 
 This board's image may ship NO git binary — check with 'which git' before
 relying on it. When it's missing, don't fight it: for a local repo use a

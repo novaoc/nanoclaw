@@ -64,25 +64,13 @@ func appendMemory(cfg *Config, note string) string {
 	return "remembered"
 }
 
-// fullMemory returns the whole MEMORY.md (for an admin to inspect for poisoning).
+// fullMemory returns the whole MEMORY.md (used by tests; the runtime path is
+// readMemory).
 func fullMemory(cfg *Config) string {
 	memMu.Lock()
 	defer memMu.Unlock()
 	b, _ := os.ReadFile(memoryPath(cfg))
 	return string(b)
-}
-
-// clearMemory sets long-term memory aside (admin action). It RENAMES to
-// MEMORY.md.bak rather than deleting — an accidental purge of months of server
-// context is the likelier mistake than poisoning, so keep it recoverable.
-func clearMemory(cfg *Config) error {
-	memMu.Lock()
-	defer memMu.Unlock()
-	err := os.Rename(memoryPath(cfg), memoryPath(cfg)+".bak")
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
 }
 
 // ── per-channel history ────────────────────────────────────────────────

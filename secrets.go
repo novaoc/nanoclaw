@@ -13,11 +13,11 @@ import (
 
 // Ephemeral secret store for deploy keys (Hetzner tokens, etc.). The design
 // keeps secret VALUES out of every place a leak could happen — they never
-// enter the LLM context, the channel history, MEMORY.md, or the logs. A coder
-// hands one in privately through the /keys modal; it lands here, on disk at
-// 0600, and is exposed to the shell tool ONLY as an environment variable, by
-// NAME. The model uses "$HETZNER_TOKEN" without ever seeing the value, and
-// wipes them with clear_secrets (or /keys clear) when the task is done. A TTL
+// enter the LLM context, the channel history, MEMORY.md, or the logs. Secrets
+// are added on the box (the /keys slash command was removed); they land here,
+// on disk at 0600, and are exposed to the shell tool ONLY as environment
+// variables, by NAME. The model uses "$HETZNER_TOKEN" without ever seeing the
+// value, and wipes them with clear_secrets when the task is done. A TTL
 // backstops a forgotten wipe.
 
 type secretVal struct {

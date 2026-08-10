@@ -200,11 +200,17 @@ func (tc *ToolCtx) generateVideo(a toolArgs) string {
 }
 
 func (tc *ToolCtx) pollVideo(ctx context.Context, id string) (string, string) {
+	polls := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return "", "video gen timed out — the job took too long. Try a shorter clip."
 		case <-time.After(4 * time.Second):
+		}
+		// Heartbeat every ~32s: a rendering video is otherwise silent in the log,
+		// which made a hot-deploy's idle-check swap mid-render and kill the job.
+		if polls++; polls%8 == 0 {
+			log.Printf("xai video: still rendering (%s, ~%ds elapsed)", id, polls*4)
 		}
 		req, _ := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(tc.cfg.XAIURL, "/")+"/videos/"+id, nil)
 		req.Header.Set("Authorization", "Bearer "+tc.cfg.xaiBearer())

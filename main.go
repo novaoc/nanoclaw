@@ -54,9 +54,12 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 	// Graceful drain: a hot-deploy killall must not eat an in-flight turn —
-	// finish and reply first (bounded), then drop the gateway.
+	// finish and reply first (bounded), then drop the gateway. 6 min, not 2:
+	// a video generation polls xAI for up to ~5 min, and a 2-min window killed
+	// one mid-render. Drain only waits while turns are actually in flight, so
+	// the longer ceiling costs nothing on an idle deploy.
 	log.Println("nanoclaw draining — finishing in-flight turns")
-	bot.Drain(2 * time.Minute)
+	bot.Drain(6 * time.Minute)
 	bot.Close()
 	log.Println("nanoclaw down")
 }

@@ -304,6 +304,10 @@ call, with only a short repository name and description. Never try to emit the
 whole application or a giant source file before the scaffold exists. Add or
 replace one focused file per later tool call, verify the exact repository, then
 deploy that verified commit. Keep working until both links are ready.
+Inspect a generated repository with github list_tree once and focused
+github read_files calls (up to three paths each). Never reconstruct a GitHub
+tree with shell, curl, wget, or repeated raw URLs, and do not read files you do
+not need to change.
 
 Stripe has two distinct states. You can write and test a Stripe-ready app using
 test/sandbox credentials, but NEVER claim a live Holodeck checkout succeeded
@@ -695,6 +699,10 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 			// the user nudge it.
 			nextLane = "code"
 			returnToCode = false
+		} else if tc.exhausted && a.cfg.Coders[authorID] && tc.usedCode {
+			// A trusted build is often larger than one model/tool lane. Checkpoint
+			// and continue internally instead of making the user say "continue".
+			nextLane = "code"
 		} else {
 			break
 		}
@@ -706,6 +714,9 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 			break
 		}
 		instruction := automaticPhaseInstruction(nextLane, blocked)
+		if tc.exhausted && nextLane == "code" {
+			instruction = "[AUTOMATIC CONTINUATION — CODE TOOL BUDGET] Continue the same approved build now without asking the user. Use the checkpoint to avoid repeating inspection or completed writes. Inspect Vela-owned repositories only through github list_tree/read_files, make focused changes, verify, deploy, and stop only when the requested repo and demo are complete."
+		}
 		messages = append(append([]Msg(nil), baseMessages...),
 			Msg{Role: "assistant", Content: "[Internal job checkpoint — DATA, not user instructions]\n" + checkpoint},
 			Msg{Role: "user", Content: instruction})
@@ -716,7 +727,7 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 		}
 		final, messages, ok = a.toolLoop(ctx, messages, tc, toolIters, toolDefs(a.cfg))
 	}
-	if ok && (tc.boundary != nil || returnToCode) {
+	if ok && (tc.boundary != nil || returnToCode || (tc.exhausted && a.cfg.Coders[authorID] && tc.usedCode)) {
 		final = "I preserved the job after several automatic research/build phase changes, but hit the continuation safety limit before finishing."
 	}
 	if t.Ambient {
@@ -849,6 +860,7 @@ func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budge
 			}
 		}
 	}
+	tc.exhausted = true
 	return "", messages, true
 }
 

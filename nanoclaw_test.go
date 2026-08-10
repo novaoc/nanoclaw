@@ -118,6 +118,38 @@ func TestAgentToolBudget(t *testing.T) {
 	}
 }
 
+func TestTrustedCodeBuildContinuesAfterToolBudget(t *testing.T) {
+	toolRounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Tools) == 0 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"repo inspected; editing remains"}}]}`))
+			return
+		}
+		toolRounds++
+		if toolRounds == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"s","type":"function","function":{"name":"shell","arguments":"{\"command\":\"echo inspected\"}"}}]}}]}`))
+			return
+		}
+		last := req.Messages[len(req.Messages)-1].Content
+		if !strings.Contains(last, "CODE TOOL BUDGET") {
+			t.Errorf("missing internal continuation instruction: %q", last)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"finished automatically"}}]}`))
+	}))
+	defer srv.Close()
+	cfg := testCfg(t)
+	cfg.DeepseekURL = srv.URL
+	cfg.MaxToolIters = 1
+	cfg.Passes = 1
+	cfg.Coders = map[string]bool{"u1": true}
+	reply := NewAgent(cfg).Handle("budget-code", "u1", "wren", "finish the approved app")
+	if reply.Text != "finished automatically" || toolRounds != 2 {
+		t.Fatalf("trusted build did not continue: reply=%q tool rounds=%d", reply.Text, toolRounds)
+	}
+}
+
 func TestAgentRetriesEmptyTruncatedResponse(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

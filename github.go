@@ -71,6 +71,24 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		}
 		tc.usedCode = true
 		return gh.createFromTemplate(tc.cfg.RailsTemplate, a.Name, a.Description)
+	case "list_tree":
+		if a.Repo == "" {
+			return "github error: list_tree needs repo"
+		}
+		if err := gh.requireOwnedRepo(a.Repo); err != nil {
+			return "github error: " + err.Error()
+		}
+		tc.usedCode = true
+		return gh.listTree(a.Repo, a.Ref, a.Path)
+	case "read_files":
+		if a.Repo == "" || len(a.Paths) == 0 || len(a.Paths) > 3 {
+			return "github error: read_files needs repo and 1-3 paths"
+		}
+		if err := gh.requireOwnedRepo(a.Repo); err != nil {
+			return "github error: " + err.Error()
+		}
+		tc.usedCode = true
+		return gh.readFiles(a.Repo, a.Ref, a.Paths)
 	case "put_file":
 		if a.Repo == "" || a.Path == "" {
 			return "github error: put_file needs repo and path"
@@ -96,7 +114,7 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		tc.usedCode = true
 		return gh.enablePages(a.Repo)
 	}
-	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|put_file|open_pr|fork|enable_pages)"
+	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|list_tree|read_files|put_file|open_pr|fork|enable_pages)"
 }
 
 type ghClient struct {
@@ -195,6 +213,109 @@ func (g *ghClient) resolveRepo(repo string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid repository name")
 	}
 	return owner, name, nil
+}
+
+func (g *ghClient) requireOwnedRepo(repo string) error {
+	owner, _, err := g.resolveRepo(repo)
+	if err != nil {
+		return err
+	}
+	login, err := g.login()
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(owner, login) {
+		return errors.New("repository inspection is limited to Vela's own repos")
+	}
+	return nil
+}
+
+func (g *ghClient) defaultRef(owner, repo, ref string) (string, error) {
+	if strings.TrimSpace(ref) != "" {
+		return strings.TrimSpace(ref), nil
+	}
+	info, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s", owner, repo), nil)
+	if err != nil {
+		return "", err
+	}
+	if st >= 400 {
+		return "", errors.New(ghErr(info, st))
+	}
+	ref, _ = info["default_branch"].(string)
+	if ref == "" {
+		ref = "main"
+	}
+	return ref, nil
+}
+
+func (g *ghClient) listTree(repo, ref, prefix string) string {
+	owner, name, err := g.resolveRepo(repo)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	ref, err = g.defaultRef(owner, name, ref)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	m, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s/git/trees/%s?recursive=1", owner, name, url.PathEscape(ref)), nil)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	if st >= 400 {
+		return "couldn't inspect tree — " + ghErr(m, st)
+	}
+	prefix = strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(prefix)), "/")
+	var paths []string
+	if entries, ok := m["tree"].([]any); ok {
+		for _, raw := range entries {
+			entry, _ := raw.(map[string]any)
+			path, _ := entry["path"].(string)
+			typ, _ := entry["type"].(string)
+			if typ == "blob" && (prefix == "" || strings.HasPrefix(path, prefix)) {
+				paths = append(paths, path)
+				if len(paths) == 300 {
+					break
+				}
+			}
+		}
+	}
+	if len(paths) == 0 {
+		return "no files found for that repository/prefix"
+	}
+	return fmt.Sprintf("repository tree at %s (%d files shown):\n%s", ref, len(paths), strings.Join(paths, "\n"))
+}
+
+func (g *ghClient) readFiles(repo, ref string, paths []string) string {
+	owner, name, err := g.resolveRepo(repo)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	ref, err = g.defaultRef(owner, name, ref)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	var out strings.Builder
+	for _, path := range paths {
+		path = filepath.ToSlash(strings.TrimSpace(path))
+		if path == "" || len(path) > 250 || strings.HasPrefix(path, "/") ||
+			filepath.ToSlash(filepath.Clean(path)) != path || strings.ContainsRune(path, 0) {
+			fmt.Fprintf(&out, "=== %s ===\nERROR: invalid path\n", path)
+			continue
+		}
+		m, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s/contents/%s?ref=%s", owner, name, ghEsc(path), url.QueryEscape(ref)), nil)
+		if err != nil || st >= 400 {
+			fmt.Fprintf(&out, "=== %s ===\nERROR: %s\n", path, ghErr(m, st))
+			continue
+		}
+		encoded, _ := m["content"].(string)
+		content, decodeErr := base64.StdEncoding.DecodeString(strings.ReplaceAll(encoded, "\n", ""))
+		if decodeErr != nil {
+			fmt.Fprintf(&out, "=== %s ===\nERROR: couldn't decode file\n", path)
+			continue
+		}
+		fmt.Fprintf(&out, "=== %s ===\n%s\n", path, clip(string(content), 2400))
+	}
+	return strings.TrimSpace(out.String())
 }
 
 // downloadArchive resolves ref to an immutable commit SHA, then downloads the

@@ -33,6 +33,7 @@ type ToolCtx struct {
 	usedWeb   bool     // this turn touched the web (fetch/search)
 	usedCode  bool     // this turn ran code (shell/file) — mutually exclusive with web
 	boundary  *phaseBoundary
+	exhausted bool // this lane used its full tool budget without a final answer
 }
 
 // phaseBoundary is an attempted web↔code transition. The tool stays blocked,
@@ -127,13 +128,15 @@ func toolDefs(cfg *Config) []ToolDef {
 			"Create and populate GitHub repos and open pull requests via the API, as Vela's own account. This is API-ONLY — nothing runs on the box. Actions: "+
 				"create_rails_app {name, description?} — REQUIRED FIRST ACTION for every site/tool/app; creates an ALWAYS-PUBLIC Ruby on Rails app from Vela's configured production framework so others can fork and self-host it; "+
 				"create_repo {name, description?} — legacy/non-app repository action; refused when the Rails framework is configured; "+
+				"list_tree {repo, ref?, path?} — inspect Vela's own repository in one call; optional path filters by prefix; "+
+				"read_files {repo, paths:[up to 3 paths], ref?} — read focused files from Vela's own repository; use this instead of shell/curl and read only files you will change; "+
 				"put_file {repo, path, content, message?, branch?} — writes/commits a file (repo is 'name' for Vela's own or 'owner/name'); "+
 				"open_pr {repo:'owner/name', title, head, base?, body?} — head is 'branch' (same repo) or 'forkowner:branch' (from a fork); "+
 				"fork {repo:'owner/name'}; "+
 				"enable_pages {repo} — legacy static publishing, never completion for an app request. "+
 				"TO DEPLOY AN APP: create_rails_app → focused put_file changes → verify_repo → deploy_repo. Never substitute standalone HTML, Node, Python, Go, or PHP. "+
 				"To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
-			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|put_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
+			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|list_tree|read_files|put_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
 	if cfg.SandboxURL != "" && cfg.SandboxToken != "" && cfg.SandboxSecret != "" { // holodeck demo hosting
 		defs = append(defs, mk("deploy_demo",
@@ -216,6 +219,7 @@ type toolArgs struct {
 	Benchmarks []string
 	Models     []benchModel
 	Files      []demoFile // deploy_demo: the app's files
+	Paths      []string   // github read_files: focused repository files
 	Port       int        // deploy_demo: container app's listen port (optional)
 }
 

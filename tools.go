@@ -143,21 +143,28 @@ func toolDefs(cfg *Config) []ToolDef {
 	return defs
 }
 
-// readOnlyToolNames are the tools a self-review pass may use: pure lookups that
-// inform a better text answer with NO side effect. Everything that produces an
-// artifact (charts, images, video, saved files), spends money, or takes a
-// Discord/box/GitHub action is deliberately excluded so the loop can't repeat a
-// terminal action across passes.
+// readOnlyToolNames are the pure lookups a self-review pass may always use:
+// they inform a better text answer with NO side effect.
 var readOnlyToolNames = map[string]bool{
 	"web_search": true, "fetch_url": true, "tcg": true, "model_releases": true,
 }
 
-// readOnlyTools filters the full belt down to the side-effect-free lookups for
-// critique passes.
-func readOnlyTools(cfg *Config) []ToolDef {
+// freeArtifactToolNames render/attach LOCALLY with no cost and no external side
+// effect. They're offered in critique passes ONLY until one artifact exists this
+// turn — so a chart the draft ran out of budget to make can still be produced,
+// exactly once, without duplication. (Paid/side-effecting tools — Grok image/
+// video gen, moderation, forum posts, github, shell — are NEVER in critique.)
+var freeArtifactToolNames = map[string]bool{
+	"bench_chart": true, "price_chart": true, "save_artifact": true, "attach_image": true,
+}
+
+// critiqueTools is the belt for a self-review pass. haveArtifact drops the local
+// artifact builders once something's been produced, preventing duplicates.
+func critiqueTools(cfg *Config, haveArtifact bool) []ToolDef {
 	var out []ToolDef
 	for _, d := range toolDefs(cfg) {
-		if readOnlyToolNames[d.Function.Name] {
+		n := d.Function.Name
+		if readOnlyToolNames[n] || (!haveArtifact && freeArtifactToolNames[n]) {
 			out = append(out, d)
 		}
 	}

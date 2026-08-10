@@ -174,10 +174,11 @@ func LoadConfig() (*Config, error) {
 		MaxToolIters:  clampInt(get("NANOCLAW_MAX_ITERS", ""), 20, 4, 40),
 		Concurrency:   clampInt(get("NANOCLAW_CONCURRENCY", ""), 1, 1, 4),
 		HistoryTurns:  24,
-		// Loop every request through self-review by default (the looper thesis:
-		// a cheap model run N times beats one expensive shot). NANOCLAW_PASSES,
-		// falls back to the old NANOCLAW_DIVE_PASSES; clamp 1-8 (1 = no loop).
-		Passes:   clampInt(firstNonEmpty(get("NANOCLAW_PASSES", ""), get("NANOCLAW_DIVE_PASSES", "")), 5, 1, 8),
+		// Loop every request through self-review (the looper thesis: a cheap
+		// model run N times beats one expensive shot). Default 2 (draft + one
+		// critique) — 5 was too slow on a texting surface (research-heavy turns
+		// ran ~8 min). NANOCLAW_PASSES, falls back to NANOCLAW_DIVE_PASSES; 1-8.
+		Passes:   clampInt(firstNonEmpty(get("NANOCLAW_PASSES", ""), get("NANOCLAW_DIVE_PASSES", "")), 2, 1, 8),
 		BraveKey: get("BRAVE_API_KEY", ""),
 		Coders:        map[string]bool{},
 		RepoUsers:     map[string]bool{},

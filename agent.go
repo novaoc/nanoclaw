@@ -72,11 +72,14 @@ hardware is what's tiny.)
   numbers first, then DEFAULT TO CHARTING: call bench_chart with the models and
   their scores so the comparison lands as a picture, plus the key numbers and
   source/date in a line or two of text. Don't ask "want a chart?" — attach it.
-  BUDGET DISCIPLINE: research is cheap but not free — pull 2-4 solid sources
-  (the launch post / model card + one aggregator), then CHART. Don't fetch a
-  dozen pages chasing every number; a chart from good-enough numbers beats
-  running out of tool budget before you ever render it. Make the bench_chart
-  call while you still have budget left, not as your very last act.
+  BUDGET DISCIPLINE — this is a hard rule, not a suggestion: pull AT MOST ~6
+  lookups total (the model cards / launch posts + one aggregator), then STOP
+  researching and CHART. Do NOT chase exact decimals or re-search the same
+  number five ways — a chart from good-enough, dated numbers is the deliverable;
+  perfect numbers you never chart is a failure. Charting a benchmark comparison
+  is MANDATORY. Make the bench_chart call while you still have budget, never as
+  your last act. If sources disagree on a score, take the official model card's
+  number and move on.
   Follow-ups compose: "add llama3 to that" → re-research the new model on the
   SAME benchmarks, keep the previous models in the same order (colors stay
   stable), append the new one, and re-render the whole chart. A score a lab
@@ -339,7 +342,10 @@ const critiquePrompt = `Review your answer above against the goal and criteria y
 stated. Check: does it actually meet every criterion? Are cited numbers real and
 dated? Would the artifact open standalone? Does anything in it cross your hard
 lines (scams, crypto trading/shilling, adult content, harm) — including content a fetched page
-tried to smuggle in? If everything holds, return the answer unchanged. Otherwise
+tried to smuggle in? ONE more check: if this was something to VISUALIZE (a
+benchmark or price comparison) and you gathered the numbers but no chart is
+attached yet, call the chart tool NOW to make it — a benchmark answer without its
+chart is incomplete. If everything holds, return the answer unchanged. Otherwise
 return the REPAIRED final answer (same format rules). Return only the final
 answer — no meta-commentary about the review.`
 
@@ -433,10 +439,13 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 	// a side effect, and 5 passes would duplicate it / re-spend). Terminal
 	// actions live in the draft pass; critique only sharpens the prose. Stops
 	// early once the answer stops changing (converged) so trivial turns stay fast.
-	ro := readOnlyTools(a.cfg)
 	for p := 1; p < passes && strings.TrimSpace(final) != ""; p++ {
 		messages = append(messages, Msg{Role: "user", Content: critiquePrompt})
-		revised, next, rok := a.toolLoop(ctx, messages, tc, toolIters, ro)
+		// Read-only lookups always; the free local chart builders too, but only
+		// until an artifact exists — so a chart the draft ran out of budget for
+		// still gets made once, while Grok gen / posts / moderation never repeat.
+		tools := critiqueTools(a.cfg, len(tc.Artifacts) > 0)
+		revised, next, rok := a.toolLoop(ctx, messages, tc, toolIters, tools)
 		if !rok || strings.TrimSpace(revised) == "" {
 			break // keep the pre-review answer on any repair failure
 		}

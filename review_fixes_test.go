@@ -136,20 +136,38 @@ func TestReadOnlyToolsExcludeSideEffects(t *testing.T) {
 	cfg.Coders = map[string]bool{"x": true} // enable code tools in the full belt
 	cfg.GitHubToken = "t"
 	cfg.XAIKey = "k"
-	ro := map[string]bool{}
-	for _, d := range readOnlyTools(cfg) {
-		ro[d.Function.Name] = true
+
+	// With an artifact already produced this turn: critique gets ONLY the pure
+	// lookups — no artifact builders (no dup), no paid/side-effecting tools.
+	locked := map[string]bool{}
+	for _, d := range critiqueTools(cfg, true) {
+		locked[d.Function.Name] = true
 	}
-	// present: pure lookups
 	for _, want := range []string{"web_search", "fetch_url", "tcg"} {
-		if !ro[want] {
-			t.Errorf("read-only belt missing %s", want)
+		if !locked[want] {
+			t.Errorf("critique belt missing lookup %s", want)
 		}
 	}
-	// absent: anything with a side effect / artifact / cost
 	for _, bad := range []string{"generate_image", "generate_video", "price_chart", "bench_chart", "save_artifact", "shell", "github", "remember", "moderate", "discord_forum", "attach_image"} {
-		if ro[bad] {
-			t.Errorf("read-only belt must NOT include side-effecting tool %s", bad)
+		if locked[bad] {
+			t.Errorf("critique belt (artifact exists) must NOT include %s", bad)
+		}
+	}
+
+	// Before any artifact: the FREE local chart builders are offered (recover a
+	// forgotten chart), but paid/side-effecting tools still never are.
+	open := map[string]bool{}
+	for _, d := range critiqueTools(cfg, false) {
+		open[d.Function.Name] = true
+	}
+	for _, want := range []string{"bench_chart", "price_chart", "save_artifact", "attach_image"} {
+		if !open[want] {
+			t.Errorf("critique belt (no artifact yet) should offer free builder %s", want)
+		}
+	}
+	for _, bad := range []string{"generate_image", "generate_video", "shell", "github", "moderate", "discord_forum"} {
+		if open[bad] {
+			t.Errorf("critique belt must NEVER include paid/side-effecting %s", bad)
 		}
 	}
 }

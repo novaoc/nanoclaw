@@ -1,4 +1,4 @@
-# nanoclaw
+# Vela
 
 <p align="center">
   <img src="assets/vela-orbits.png" alt="Vela orbits mark" width="140" />
@@ -18,6 +18,10 @@ up benchmarks for a model release, generate media, review an agent design, or
 open a goal-framed request for the community. It searches and reads sources,
 creates public forkable repositories, deploys throwaway live demos, and
 remembers your server's projects across reboots.
+
+Vela is the product and repository name. Existing 2.x installations retain
+the `NANOCLAW_*` configuration prefix and legacy service filenames so upgrades
+do not silently lose credentials or data.
 
 ## How it works
 
@@ -182,7 +186,7 @@ narrow it.
 > **@vela** spin up a repo `tcg-price-alerts`, drop in a README and a hello.py
 > → creates `Velaoc/tcg-price-alerts`, commits the files, links them
 
-**Live demos — the holodeck.** Vela ships to her own sandbox: ask her to
+**Live demos — Holodex.** Vela ships to her own sandbox: ask her to
 "make me X and put it online" and she builds a Ruby on Rails app from her
 private framework, pushes the code to a public repo, verifies it, and deploys
 the exact tested commit to `https://<app>.demo.holode.xyz/`. Container apps
@@ -192,7 +196,8 @@ the public repo is the permanent, forkable copy. GitHub Pages (`enable_pages`)
 remains the durable option for static sites.
 
 Larger repositories use a stricter path: Vela streams an immutable GitHub
-commit archive to Holodeck, which builds the Docker `test` target and final
+commit archive to [Holodex](https://github.com/novaoc/holodex), which builds
+the Docker `test` target and final
 image on the stronger server. A successful build returns a one-hour signed
 receipt bound to the exact archive; deployment rejects altered, expired, or
 untested source. Vela's GitHub token stays on the Nano.
@@ -257,7 +262,7 @@ capability is entirely off; non-coders are refused in code.
 
 **Injection guard.** Web fetches (`web_search`/`fetch_url`) and code execution
 (`shell`/`write_file`/`read_file`/GitHub/deploy) run in isolated internal
-phases. If Vela needs to cross that boundary, NanoClaw blocks the mixed-phase
+phases. If Vela needs to cross that boundary, Vela blocks the mixed-phase
 tool call, makes a bounded inert checkpoint, drops the raw tool transcript,
 and starts her next phase automatically. A fetched page therefore cannot flow
 directly into shell commands or a repository push, and the user does not need
@@ -271,7 +276,7 @@ runs only binaries you signed). So: **do not set `NANOCLAW_CODERS` in
 production until signed-tag verification is live on the box.** And scope the
 token to blast radius — a **fine-grained PAT limited to Vela's own repos,
 contents + pull-request write only, no admin**, treated as rotatable. Then a
-stolen token costs embarrassment, not infrastructure. nanoclaw logs this
+stolen token costs embarrassment, not infrastructure. Vela logs this
 reminder at startup when code + a token are both configured.
 
 **Hardware reality — she's a 35.56 × 22.86 mm board, not a build server.** The
@@ -337,16 +342,16 @@ instruction. Blank `NANOCLAW_VISION_MODEL` turns image reading off.
 
 ### Mentions — quick turns
 
-> **@nanoclaw** mock up a landing page for a TCG price-alert app — dark, one CTA
+> **@vela** mock up a landing page for a TCG price-alert app — dark, one CTA
 
 → replies with the reasoning and attaches `landing.html`, self-contained,
 open it in any browser.
 
-> **@nanoclaw** what are the benchmark numbers for the latest DeepSeek release vs GPT?
+> **@vela** what are the benchmark numbers for the latest DeepSeek release vs GPT?
 
 → searches, reads the sources, answers with cited URLs.
 
-> **@nanoclaw** remember that the booth project ships on the 20th
+> **@vela** remember that the booth project ships on the 20th
 
 → lands in `MEMORY.md`, loaded into every future conversation.
 

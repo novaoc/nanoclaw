@@ -123,6 +123,13 @@ func toolDefs(cfg *Config) []ToolDef {
 				"To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
 			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|put_file|open_pr|fork"},"name":{"type":"string"},"description":{"type":"string"},"private":{"type":"boolean"},"repo":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
+	if cfg.SandboxURL != "" && cfg.SandboxToken != "" { // holodeck demo hosting
+		defs = append(defs, mk("deploy_demo",
+			"Deploy a static web app/site to Vela's own demo host and get a LIVE URL on her domain, instantly. Use when someone wants a working demo online — the usual ask is 'make me X' → build it, push the code to a repo (github tool), AND deploy_demo so they get both the repo and a live link. "+
+				"files = the complete app: an index.html at the root (required, self-contained or referencing the other files by relative path), plus any css/js/assets. Static only — no server code runs. "+
+				"Demos SELF-DESTRUCT after 7 days (say so when sharing the link); the GitHub repo is the permanent copy.",
+			`{"type":"object","properties":{"name":{"type":"string","description":"short app name — becomes the subdomain slug"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string","description":"relative path, e.g. index.html or css/style.css"},"content":{"type":"string"}},"required":["path","content"]}}},"required":["name","files"]}`))
+	}
 	if cfg.CodeEnabled() { // gated to the coder allowlist (NANOCLAW_CODERS)
 		defs = append(defs,
 			mk("shell",
@@ -189,6 +196,12 @@ type toolArgs struct {
 	Private    bool
 	Benchmarks []string
 	Models     []benchModel
+	Files      []demoFile // deploy_demo: the app's files
+}
+
+type demoFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 // unwrapArgs undoes DeepSeek's occasional double-wrapping of tool arguments,
@@ -284,6 +297,8 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// turn (blocking every later web tool with "this turn already ran code").
 	case "github":
 		return tc.runGithub(a)
+	case "deploy_demo":
+		return tc.deployDemo(a)
 	case "shell":
 		return tc.runShell(a.Command)
 	case "write_file":

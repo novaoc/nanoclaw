@@ -1,4 +1,4 @@
-.PHONY: build riscv64 test run
+.PHONY: build riscv64 test run holodeck
 
 build:
 	go build -o nanoclaw .
@@ -18,3 +18,8 @@ run: build
 deploy: riscv64
 	scp nanoclaw-riscv64 $(NANO):/root/nanoclaw
 	@echo "now on the board: /etc/init.d/S99nanoclaw restart  (or systemctl restart nanoclaw)"
+
+# the demo sandbox server (deployed to its own box, not the Nano)
+holodeck:
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o holodeck-linux-amd64 ./cmd/holodeck
+	@ls -lh holodeck-linux-amd64

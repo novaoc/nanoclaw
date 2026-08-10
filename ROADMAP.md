@@ -21,10 +21,10 @@ roughly in order of value-per-complexity on a 256 MB board.
   presence there — shorter backoff, no coin flip for a few minutes — then
   cool down.
 
-- **Vercel deploys.** Pages covers static sites (shipped); a `VERCEL_TOKEN` +
-  their deployments API would add serverless functions and custom domains for
-  the rare site that needs a backend. Only worth it when someone actually
-  asks for one.
+- **Holodeck backends.** The demo sandbox (shipped) is static-only by
+  design. If demos ever need a server side, the safe path is per-app
+  containers with no network egress and hard CPU/RAM caps — a real project,
+  not a tweak. Until then, backends belong in the repo with a README.
 
 ## Mid — a day or two each
 

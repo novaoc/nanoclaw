@@ -102,6 +102,9 @@ type Config struct {
 	TalkValue float64 // NANOCLAW_TALK_VALUE 0-1: chattiness of unprompted chime-ins; 0 = off
 	Learning  bool    // NANOCLAW_LEARNING: expression learning + person impressions
 
+	SandboxURL   string // NANOCLAW_SANDBOX_URL — holodeck demo host (e.g. https://demo.holode.xyz)
+	SandboxToken string // NANOCLAW_SANDBOX_TOKEN — holodeck deploy bearer token
+
 	Coders     map[string]bool // Discord IDs allowed to run shell/code (root-trust)
 	RepoUsers  map[string]bool // Discord IDs allowed the github API tool; empty = everyone
 	Mods       map[string]bool // Discord IDs allowed moderation (NANOCLAW_MODS); empty = off
@@ -170,6 +173,8 @@ func LoadConfig() (*Config, error) {
 		BraveKey:      get("BRAVE_API_KEY", ""),
 		TalkValue:     clampFloat(get("NANOCLAW_TALK_VALUE", ""), 0.3, 0, 1),
 		Learning:      get("NANOCLAW_LEARNING", "on") != "off",
+		SandboxURL:    strings.TrimRight(get("NANOCLAW_SANDBOX_URL", ""), "/"),
+		SandboxToken:  get("NANOCLAW_SANDBOX_TOKEN", ""),
 		Coders:        map[string]bool{},
 		RepoUsers:     map[string]bool{},
 		Mods:          map[string]bool{},

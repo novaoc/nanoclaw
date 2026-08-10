@@ -44,6 +44,16 @@ func atoiOr(s string, def int) int {
 	return def
 }
 
+// firstNonEmpty returns the first non-blank string (env fallback chains).
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // clampInt parses s and keeps it within [lo,hi], else returns def.
 func clampInt(s string, def, lo, hi int) int {
 	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n >= lo && n <= hi {
@@ -102,8 +112,7 @@ type Config struct {
 	MaxToolIters  int
 	Concurrency   int // max turns running at once; 1 = strict queue (RAM-safe on the Nano)
 	HistoryTurns  int
-	DiveToolIters int    // /dive gets a bigger tool budget…
-	DivePasses    int    // …and N self-review passes (the looper-model play)
+	Passes        int    // self-review passes on the text model (the looper play); 1 = no loop
 	BraveKey      string // BRAVE_API_KEY — real search API; falls back to DuckDuckGo scraping
 
 	Coders     map[string]bool // Discord IDs allowed to run shell/code (root-trust)
@@ -165,9 +174,11 @@ func LoadConfig() (*Config, error) {
 		MaxToolIters:  clampInt(get("NANOCLAW_MAX_ITERS", ""), 20, 4, 40),
 		Concurrency:   clampInt(get("NANOCLAW_CONCURRENCY", ""), 1, 1, 4),
 		HistoryTurns:  24,
-		DiveToolIters: 16,
-		DivePasses:    atoiOr(get("NANOCLAW_DIVE_PASSES", ""), 2),
-		BraveKey:      get("BRAVE_API_KEY", ""),
+		// Loop every request through self-review by default (the looper thesis:
+		// a cheap model run N times beats one expensive shot). NANOCLAW_PASSES,
+		// falls back to the old NANOCLAW_DIVE_PASSES; clamp 1-8 (1 = no loop).
+		Passes:   clampInt(firstNonEmpty(get("NANOCLAW_PASSES", ""), get("NANOCLAW_DIVE_PASSES", "")), 5, 1, 8),
+		BraveKey: get("BRAVE_API_KEY", ""),
 		Coders:        map[string]bool{},
 		RepoUsers:     map[string]bool{},
 		Mods:          map[string]bool{},

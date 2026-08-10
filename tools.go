@@ -143,6 +143,27 @@ func toolDefs(cfg *Config) []ToolDef {
 	return defs
 }
 
+// readOnlyToolNames are the tools a self-review pass may use: pure lookups that
+// inform a better text answer with NO side effect. Everything that produces an
+// artifact (charts, images, video, saved files), spends money, or takes a
+// Discord/box/GitHub action is deliberately excluded so the loop can't repeat a
+// terminal action across passes.
+var readOnlyToolNames = map[string]bool{
+	"web_search": true, "fetch_url": true, "tcg": true, "model_releases": true,
+}
+
+// readOnlyTools filters the full belt down to the side-effect-free lookups for
+// critique passes.
+func readOnlyTools(cfg *Config) []ToolDef {
+	var out []ToolDef
+	for _, d := range toolDefs(cfg) {
+		if readOnlyToolNames[d.Function.Name] {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 type toolArgs struct {
 	Query, URL, Name, Content, Note, Command, Path, Game, Set          string
 	Action, Description, Repo, Message, Branch, Title, Head, Base, Body string

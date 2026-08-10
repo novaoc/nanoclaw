@@ -371,28 +371,22 @@ func NewAgent(cfg *Config) *Agent {
 // SetDiscord wires the actuator once the bot exists (moderation, forum posts).
 func (a *Agent) SetDiscord(d Discord) { a.disc = d }
 
-// Handle runs one quick agent turn for a channel message. Any imageURLs are
-// read by the vision model first and folded into the turn.
+// Handle runs one agent turn for a channel message, looping through
+// self-review by default (cfg.Passes). Any imageURLs are read by the vision
+// model first (once) and folded into the turn.
 func (a *Agent) Handle(channelID, authorID, author, content string, imageURLs ...string) Reply {
 	return a.HandleTurn(Turn{ChannelID: channelID, AuthorID: authorID, Author: author, ImageURLs: imageURLs}, content)
 }
 
 // HandleTurn is Handle with the full turn context (guild id for Discord actions).
 func (a *Agent) HandleTurn(t Turn, content string) Reply {
-	return a.run(t, content, a.cfg.MaxToolIters, 1)
+	return a.run(t, content, a.cfg.MaxToolIters, a.cfg.Passes)
 }
 
-// Dive is the /dive skill: same loop, bigger tool budget, plus self-review
-// passes — the looper-model play (a cheap model run N times with a clear
-// goal beats one expensive shot).
+// Dive is kept as an internal alias (the /dive command was removed — looping is
+// now the default for every turn). Used by the eval harness and tests.
 func (a *Agent) Dive(channelID, authorID, author, task string) Reply {
-	return a.DiveTurn(Turn{ChannelID: channelID, AuthorID: authorID, Author: author}, task)
-}
-
-func (a *Agent) DiveTurn(t Turn, task string) Reply {
-	content := "DIVE (deep loop requested — state the goal + criteria first, " +
-		"loop until met, tick criteria off at the end): " + task
-	return a.run(t, content, a.cfg.DiveToolIters, a.cfg.DivePasses)
+	return a.HandleTurn(Turn{ChannelID: channelID, AuthorID: authorID, Author: author}, task)
 }
 
 func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
@@ -423,7 +417,9 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 	messages := append([]Msg{{Role: "system", Content: sys}}, a.hist.Get(channelID)...)
 	messages = append(messages, userMsg)
 
-	final, messages, ok := a.toolLoop(ctx, messages, tc, toolIters)
+	// Draft pass: the full tool belt (this is where any image/chart/post/
+	// moderation actually happens — exactly once).
+	final, messages, ok := a.toolLoop(ctx, messages, tc, toolIters, toolDefs(a.cfg))
 	if !ok {
 		// Model/transport error — still record the turn so the next message has
 		// context that this was asked (otherwise history silently loses it), and
@@ -431,15 +427,24 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 		a.hist.Append(channelID, userMsg, Msg{Role: "assistant", Content: final})
 		return Reply{Text: final, Artifacts: tc.Artifacts}
 	}
-	// self-review passes: append the critique instruction and loop again;
-	// the repair round keeps tool access (a fix may need another search)
-	for p := 1; p < passes && final != ""; p++ {
+	// Self-review passes refine the TEXT with READ-ONLY tools only — a repaired
+	// answer may need another lookup, but the loop must never re-generate an
+	// image/video, re-render a chart, re-post, re-moderate, or re-commit (that's
+	// a side effect, and 5 passes would duplicate it / re-spend). Terminal
+	// actions live in the draft pass; critique only sharpens the prose. Stops
+	// early once the answer stops changing (converged) so trivial turns stay fast.
+	ro := readOnlyTools(a.cfg)
+	for p := 1; p < passes && strings.TrimSpace(final) != ""; p++ {
 		messages = append(messages, Msg{Role: "user", Content: critiquePrompt})
-		revised, next, rok := a.toolLoop(ctx, messages, tc, toolIters)
-		if !rok || revised == "" {
+		revised, next, rok := a.toolLoop(ctx, messages, tc, toolIters, ro)
+		if !rok || strings.TrimSpace(revised) == "" {
 			break // keep the pre-review answer on any repair failure
 		}
+		converged := strings.TrimSpace(revised) == strings.TrimSpace(final)
 		final, messages = revised, next
+		if converged {
+			break // answer stabilized — more passes won't help
+		}
 	}
 	if final == "" {
 		// Budget exhausted mid-research. Don't dead-end with "ask me to
@@ -468,11 +473,12 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 	return Reply{Text: final, Artifacts: tc.Artifacts}
 }
 
-// toolLoop drives chat+tools until the model answers in prose or the
-// budget runs out. Returns (answer, full transcript, ok).
-func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budget int) (string, []Msg, bool) {
+// toolLoop drives chat+tools until the model answers in prose or the budget
+// runs out. tools is the belt offered this pass (full on the draft, read-only
+// on critique passes). Returns (answer, full transcript, ok).
+func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budget int, tools []ToolDef) (string, []Msg, bool) {
 	for i := 0; i < budget; i++ {
-		msg, err := a.llm.Chat(ctx, messages, toolDefs(a.cfg))
+		msg, err := a.llm.Chat(ctx, messages, tools)
 		if err != nil {
 			log.Printf("llm error: %v", err)
 			return "⚠️ model error: " + err.Error(), messages, false

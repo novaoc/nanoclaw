@@ -126,9 +126,6 @@ func TestDiveSelfReviewPass(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		calls++
 		if calls == 1 {
-			if !strings.Contains(req.Messages[len(req.Messages)-1].Content, "DIVE") {
-				t.Errorf("dive marker missing from user message")
-			}
 			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"draft answer"}}]}`))
 			return
 		}
@@ -141,13 +138,13 @@ func TestDiveSelfReviewPass(t *testing.T) {
 	defer srv.Close()
 	cfg := testCfg(t)
 	cfg.DeepseekURL = srv.URL
-	cfg.DiveToolIters, cfg.DivePasses = 16, 2
-	r := NewAgent(cfg).Dive("c", "u1", "wren", "benchmark rundown")
+	cfg.Passes = 2
+	r := NewAgent(cfg).Handle("c", "u1", "wren", "benchmark rundown")
 	if r.Text != "repaired answer" {
 		t.Fatalf("expected repaired answer, got %q", r.Text)
 	}
 	if calls != 2 {
-		t.Fatalf("expected 2 passes, got %d", calls)
+		t.Fatalf("expected 2 passes (draft + 1 critique), got %d", calls)
 	}
 	// history keeps the FINAL answer only
 	h := NewHistory(cfg).Get("c")

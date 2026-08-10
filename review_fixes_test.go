@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -126,5 +128,48 @@ func TestAttachmentTruthGuard(t *testing.T) {
 	}
 	if claimsAttachment("Bitcoin is at $65k, up 1.6% this month.") {
 		t.Error("plain text wrongly flagged as attachment claim")
+	}
+}
+
+func TestReadOnlyToolsExcludeSideEffects(t *testing.T) {
+	cfg := testCfg(t)
+	cfg.Coders = map[string]bool{"x": true} // enable code tools in the full belt
+	cfg.GitHubToken = "t"
+	cfg.XAIKey = "k"
+	ro := map[string]bool{}
+	for _, d := range readOnlyTools(cfg) {
+		ro[d.Function.Name] = true
+	}
+	// present: pure lookups
+	for _, want := range []string{"web_search", "fetch_url", "tcg"} {
+		if !ro[want] {
+			t.Errorf("read-only belt missing %s", want)
+		}
+	}
+	// absent: anything with a side effect / artifact / cost
+	for _, bad := range []string{"generate_image", "generate_video", "price_chart", "bench_chart", "save_artifact", "shell", "github", "remember", "moderate", "discord_forum", "attach_image"} {
+		if ro[bad] {
+			t.Errorf("read-only belt must NOT include side-effecting tool %s", bad)
+		}
+	}
+}
+
+func TestCritiqueConvergenceStopsEarly(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		// same answer every time → should converge after the first critique
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"stable answer"}}]}`))
+	}))
+	defer srv.Close()
+	cfg := testCfg(t)
+	cfg.DeepseekURL = srv.URL
+	cfg.Passes = 5 // would be 5 calls without convergence
+	r := NewAgent(cfg).Handle("c", "u1", "wren", "hi")
+	if r.Text != "stable answer" {
+		t.Fatalf("got %q", r.Text)
+	}
+	if calls != 2 { // draft + one critique that returns the same → stop
+		t.Fatalf("convergence should stop after 2 calls, got %d", calls)
 	}
 }

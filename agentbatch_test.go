@@ -7,7 +7,7 @@ func TestAgentBatch(t *testing.T){
     DeepseekKey:os.Getenv("DEEPSEEK_API_KEY"), DeepseekURL:os.Getenv("DEEPSEEK_API_URL"),
     Model:os.Getenv("NANOCLAW_MODEL"), VisionModel:"stepfun/step-3.7-flash", BraveKey:os.Getenv("BRAVE_API_KEY"),
     DataDir:dir, FocusChannels:map[string]bool{}, MaxToolIters:14, HistoryTurns:24,
-    DiveToolIters:16, DivePasses:2, Coders:map[string]bool{}, RepoUsers:map[string]bool{},
+    Coders:map[string]bool{}, RepoUsers:map[string]bool{},
   }
   a:=NewAgent(cfg)
   psa:="https://moxiecardshop.com/cdn/shop/files/CharizardV050PSA10.png?v=1684468758&width=1445"

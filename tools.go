@@ -115,7 +115,7 @@ func toolDefs(cfg *Config) []ToolDef {
 		defs = append(defs, mk("github",
 			"Create and populate GitHub repos, open pull requests, and PUBLISH LIVE WEBSITES via the API, as Vela's own account. This is API-ONLY — nothing runs on the box. Actions: "+
 				"create_repo {name, description?, private?} — makes a repo (with a README); "+
-				"create_rails_app {name, description?} — creates an ALWAYS-PRIVATE app from Vela's configured production Rails foundation; "+
+				"create_rails_app {name, description?} — creates an ALWAYS-PUBLIC app from Vela's configured production Rails foundation so others can fork and self-host it; "+
 				"put_file {repo, path, content, message?, branch?} — writes/commits a file (repo is 'name' for Vela's own or 'owner/name'); "+
 				"open_pr {repo:'owner/name', title, head, base?, body?} — head is 'branch' (same repo) or 'forkowner:branch' (from a fork); "+
 				"fork {repo:'owner/name'}; "+

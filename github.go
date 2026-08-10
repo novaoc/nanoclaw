@@ -290,7 +290,7 @@ func (g *ghClient) createRepo(name, desc string, private bool) string {
 	return fmt.Sprintf("created repo %s", url)
 }
 
-// createFromTemplate creates an always-private repository from Vela's private
+// createFromTemplate creates a public, forkable repository from Vela's private
 // Rails foundation. The configured template name stays out of the model prompt
 // and result; callers only need to choose the new application's name.
 func (g *ghClient) createFromTemplate(template, name, desc string) string {
@@ -304,7 +304,7 @@ func (g *ghClient) createFromTemplate(template, name, desc string) string {
 	}
 	m, st, err := g.do("POST", fmt.Sprintf("/repos/%s/%s/generate", owner, repo), map[string]any{
 		"owner": destinationOwner, "name": name, "description": desc,
-		"private": true, "include_all_branches": false,
+		"private": false, "include_all_branches": false,
 	})
 	if err != nil {
 		return "github error: " + err.Error()
@@ -313,7 +313,7 @@ func (g *ghClient) createFromTemplate(template, name, desc string) string {
 		return "couldn't create Rails app — " + ghErr(m, st)
 	}
 	u, _ := m["html_url"].(string)
-	return fmt.Sprintf("created private Rails app %s from Vela's production foundation", u)
+	return fmt.Sprintf("created public Rails app %s from Vela's production foundation — anyone can fork and self-host it", u)
 }
 
 func (g *ghClient) fork(repoFull string) string {

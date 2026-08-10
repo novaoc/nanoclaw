@@ -66,7 +66,7 @@ func TestRepoBuildToolsAreCoderOnlyAndConfigured(t *testing.T) {
 	}
 }
 
-func TestRailsTemplateActionIsPrivateAndDoesNotExposeTemplate(t *testing.T) {
+func TestRailsTemplateActionCreatesPublicAppsWithoutExposingTemplate(t *testing.T) {
 	cfg := testCfg(t)
 	cfg.GitHubToken = "github-token"
 	cfg.RailsTemplate = "private-owner/private-foundation"
@@ -77,8 +77,8 @@ func TestRailsTemplateActionIsPrivateAndDoesNotExposeTemplate(t *testing.T) {
 			description = d.Function.Description
 		}
 	}
-	if !strings.Contains(description, "create_rails_app") || !strings.Contains(description, "ALWAYS-PRIVATE") {
-		t.Fatal("GitHub tool does not expose the private Rails factory")
+	if !strings.Contains(description, "create_rails_app") || !strings.Contains(description, "ALWAYS-PUBLIC") {
+		t.Fatal("GitHub tool does not expose the public Rails app factory")
 	}
 	if strings.Contains(description, cfg.RailsTemplate) {
 		t.Fatal("private foundation repository leaked into the model-facing tool description")

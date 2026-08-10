@@ -202,8 +202,10 @@ the GitHub token: `verify_repo` runs the Docker `test` target and final-image
 compile, then returns a one-hour receipt tied to the exact commit archive;
 `deploy_repo` refuses changed, expired, or unverified source.
 Set `NANOCLAW_RAILS_TEMPLATE=owner/private-template` to enable the GitHub
-tool's `create_rails_app` action; it always creates the resulting app as a
-private repository.
+tool's `create_rails_app` action. The foundation repository remains private,
+but every resulting app repository is public so people can fork it and deploy
+it on their own servers. Generated repositories must contain placeholders and
+setup instructions, never Vela's deployment credentials.
 
 > **@vela** clone my repo, add a /health endpoint, run the tests, commit and push
 

@@ -21,6 +21,11 @@ roughly in order of value-per-complexity on a 256 MB board.
   presence there — shorter backoff, no coin flip for a few minutes — then
   cool down.
 
+- **Vercel deploys.** Pages covers static sites (shipped); a `VERCEL_TOKEN` +
+  their deployments API would add serverless functions and custom domains for
+  the rare site that needs a backend. Only worth it when someone actually
+  asks for one.
+
 ## Mid — a day or two each
 
 - **Concept-graph memory.** Replace flat MEMORY.md retrieval with a tiny

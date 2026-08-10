@@ -123,12 +123,12 @@ func toolDefs(cfg *Config) []ToolDef {
 				"To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
 			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|put_file|open_pr|fork"},"name":{"type":"string"},"description":{"type":"string"},"private":{"type":"boolean"},"repo":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
-	if cfg.SandboxURL != "" && cfg.SandboxToken != "" { // holodeck demo hosting
+	if cfg.SandboxURL != "" && cfg.SandboxToken != "" && cfg.SandboxSecret != "" { // holodeck demo hosting
 		defs = append(defs, mk("deploy_demo",
-			"Deploy a static web app/site to Vela's own demo host and get a LIVE URL on her domain, instantly. Use when someone wants a working demo online — the usual ask is 'make me X' → build it, push the code to a repo (github tool), AND deploy_demo so they get both the repo and a live link. "+
-				"files = the complete app: an index.html at the root (required, self-contained or referencing the other files by relative path), plus any css/js/assets. Static only — no server code runs. "+
-				"Demos SELF-DESTRUCT after 7 days (say so when sharing the link); the GitHub repo is the permanent copy.",
-			`{"type":"object","properties":{"name":{"type":"string","description":"short app name — becomes the subdomain slug"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string","description":"relative path, e.g. index.html or css/style.css"},"content":{"type":"string"}},"required":["path","content"]}}},"required":["name","files"]}`))
+			"Deploy an app YOU built to Vela's own demo host and get a LIVE URL on her domain. Use when someone wants a working demo online — the flow for 'make me X' is: build it, push the code to a repo (github tool), AND deploy_demo so they get both the repo and a live link. "+
+				"TWO kinds: (a) STATIC — include an index.html at the root (self-contained or relative-linked assets); (b) REAL APP (Node/Python/Go/…) — include a Dockerfile plus the source, and holodeck builds and runs it in a locked-down container (no internet egress at runtime, so bundle deps at build time; EXPOSE the port or pass it as `port`). "+
+				"ONLY deploy apps you built yourself in this workflow — never clone-and-host someone else's repo. The whole deck WIPES DAILY at 3AM Mexico City (say so when sharing the link); the GitHub repo is the permanent copy.",
+			`{"type":"object","properties":{"name":{"type":"string","description":"short app name — becomes the subdomain slug"},"port":{"type":"integer","description":"container app's listen port (optional; else EXPOSE or 8080)"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string","description":"relative path, e.g. index.html, Dockerfile, src/app.js"},"content":{"type":"string"}},"required":["path","content"]}}},"required":["name","files"]}`))
 	}
 	if cfg.CodeEnabled() { // gated to the coder allowlist (NANOCLAW_CODERS)
 		defs = append(defs,
@@ -197,6 +197,7 @@ type toolArgs struct {
 	Benchmarks []string
 	Models     []benchModel
 	Files      []demoFile // deploy_demo: the app's files
+	Port       int        // deploy_demo: container app's listen port (optional)
 }
 
 type demoFile struct {

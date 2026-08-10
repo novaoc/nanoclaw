@@ -102,8 +102,9 @@ type Config struct {
 	TalkValue float64 // NANOCLAW_TALK_VALUE 0-1: chattiness of unprompted chime-ins; 0 = off
 	Learning  bool    // NANOCLAW_LEARNING: expression learning + person impressions
 
-	SandboxURL   string // NANOCLAW_SANDBOX_URL — holodeck demo host (e.g. https://demo.holode.xyz)
-	SandboxToken string // NANOCLAW_SANDBOX_TOKEN — holodeck deploy bearer token
+	SandboxURL    string // NANOCLAW_SANDBOX_URL — holodeck demo host (e.g. https://demo.holode.xyz)
+	SandboxToken  string // NANOCLAW_SANDBOX_TOKEN — holodeck deploy bearer token
+	SandboxSecret string // NANOCLAW_SANDBOX_SECRET — HMAC build secret proving deploys are Vela's own
 
 	RequestsForum string // NANOCLAW_REQUESTS_FORUM — forum channel /request posts into (name or id)
 
@@ -177,6 +178,7 @@ func LoadConfig() (*Config, error) {
 		Learning:      get("NANOCLAW_LEARNING", "on") != "off",
 		SandboxURL:    strings.TrimRight(get("NANOCLAW_SANDBOX_URL", ""), "/"),
 		SandboxToken:  get("NANOCLAW_SANDBOX_TOKEN", ""),
+		SandboxSecret: get("NANOCLAW_SANDBOX_SECRET", ""),
 		Coders:        map[string]bool{},
 		RepoUsers:     map[string]bool{},
 		Mods:          map[string]bool{},

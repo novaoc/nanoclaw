@@ -175,6 +175,10 @@ func TestReadOnlyToolsExcludeSideEffects(t *testing.T) {
 func TestRailsIsAFirstClassBuildTarget(t *testing.T) {
 	for _, want := range []string{
 		"private Vela Rails foundation",
+		"repo is public and forkable",
+		"server, Stripe fulfillment comes only from a verified",
+		"OAuth identities are never merged merely because an",
+		"Never use live keys in a",
 		"run verify_repo",
 		"deploy that exact commit",
 	} {
@@ -200,6 +204,24 @@ func TestRailsIsAFirstClassBuildTarget(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("repository verifier missing from configured tool belt")
+	}
+}
+
+func TestSelfIntroductionCoversTheCurrentKitHonestly(t *testing.T) {
+	for _, want := range []string{
+		"named for the Vela pulsar",
+		"Every repo you create on request is public and forkable",
+		"Stripe-ready",
+		"preview payment sandboxes and production credentials are",
+		"image understanding",
+		"/request",
+		"/dive",
+		"/reset",
+		"/grok",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("self-introduction guidance missing %q", want)
+		}
 	}
 }
 

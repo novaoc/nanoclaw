@@ -2,7 +2,7 @@ package main
 
 import "testing"
 
-// Exactly /dive and /grok — everything else was removed on purpose
+// Exactly the four supported commands — everything else was removed on purpose
 // (registerCommands bulk-overwrites, so anything not listed here is deleted
 // from the guild, including strays from older builds).
 func TestRegisteredCommands(t *testing.T) {

@@ -13,9 +13,10 @@ memory on the SD card. Plug into USB power and it serves your whole server,
 24/7.
 
 Focused on **AI development and agentic engineering**: ask it in Discord to
-mock up a website (it attaches a self-contained HTML file), pressure-test a
-project idea, dig up benchmarks for a new model release, or review an agent
-design — it searches the web, reads sources, cites what it read, and
+build and publish a website or application, pressure-test a project idea, dig
+up benchmarks for a model release, generate media, review an agent design, or
+open a goal-framed request for the community. It searches and reads sources,
+creates public forkable repositories, deploys throwaway live demos, and
 remembers your server's projects across reboots.
 
 ## How it works
@@ -33,6 +34,8 @@ Discord message ──► gateway (discordgo) ──► agent loop (DeepSeek too
                                             │  discord_forum(post/reply in a forum channel)
                                             │  moderate     (timeout/kick/ban — mod allowlist)
                                             │  github       (create repo / PR — API, no shell)
+                                            │  deploy_demo  (static/container live demo)
+                                            │  verify_repo / deploy_repo (heavy verified builds)
                                             │  shell/write/read_file  (coder allowlist)
                                             │  save_artifact(HTML/code → attachment)
                                             │  remember     (MEMORY.md on SD)
@@ -151,36 +154,41 @@ Auth is either a **SuperGrok / X Premium+ subscription** — an admin runs
 pay-as-you-go `XAI_API_KEY` from console.x.ai. `NANOCLAW_IMAGE_USERS`
 restricts who can spend; blank opens it to the whole server.
 
-The only slash commands are `/dive` (the deep loop), `/reset` (restart her
-context in the current channel — conversation history and the ambient
-transcript are dropped; long-term memory, impressions, and learned
-expressions are kept), and `/grok` (login/status/logout) — everything else is
-just conversation. (The old `/memory`, `/keys`, and `/focus` commands were
-removed; command registration bulk-overwrites, so stale commands from older
-builds disappear from the guild on their own.)
+The slash commands are `/dive` (the deep loop), `/request` (open a goal-framed
+post in the requests forum), `/reset` (restart the current channel context
+while preserving long-term memory), and `/grok` (login/status/logout).
+Everything else is conversation. The old `/memory`, `/keys`, and `/focus`
+commands were removed; command registration bulk-overwrites, so stale commands
+from older builds disappear from the guild on their own.
 
 ### Repos & PRs for everyone (github tool)
 
 Optional, and separate from the coder shell. With a `GITHUB_TOKEN` set, Vela
 gets a `github` tool that talks straight to the GitHub API as her own account —
-**create a repo, write/commit files, open a PR, fork** — with **no shell and
-nothing running on the box**. Because it can't touch the machine, it's open to
-the whole server by default; set `NANOCLAW_REPO_USERS` to a comma-separated
-Discord-ID list to narrow it.
+**create a public repo, write/commit files, open a PR, fork** — with **no shell
+and nothing running on the box**. Repositories Vela creates on request are
+always public and forkable; the tool does not accept a private-repository
+option. Because it can't touch the machine, it's open to the whole server by
+default; set `NANOCLAW_REPO_USERS` to a comma-separated Discord-ID list to
+narrow it.
 
 > **@vela** spin up a repo `tcg-price-alerts`, drop in a README and a hello.py
 > → creates `Velaoc/tcg-price-alerts`, commits the files, links them
 
 **Live demos — the holodeck.** Vela ships to her own sandbox: ask her to
-"make me X and put it online" and she builds it, pushes the code to a repo,
-AND deploys the same files to `https://<app>.demo.holode.xyz/` — instantly,
-on her own domain. Every demo **self-destructs 7 days after deploy**; the
-repo is the permanent copy. The sandbox ([holodeck](https://github.com/novaoc/holodeck), one static Go
-binary behind Caddy with on-demand TLS) serves static files only — nothing
-deployed there ever executes server-side, per-app subdomains isolate demos
-from each other in the browser, and only hostnames of apps that actually
-exist can get certificates. GitHub Pages (`enable_pages`) remains the
-fallback for sites that should outlive a week.
+"make me X and put it online" and she builds it, pushes the code to a public
+repo, and deploys a live copy to `https://<app>.demo.holode.xyz/`. Holodeck
+serves both static bundles and real Dockerized applications. Container apps
+run with memory/CPU/process caps, dropped capabilities, no-new-privileges, and
+no general internet egress. The whole deck wipes **daily at 3AM Mexico City**;
+the public repo is the permanent, forkable copy. GitHub Pages (`enable_pages`)
+remains the durable option for static sites.
+
+Larger repositories use a stricter path: Vela streams an immutable GitHub
+commit archive to Holodeck, which builds the Docker `test` target and final
+image on the stronger server. A successful build returns a one-hour signed
+receipt bound to the exact archive; deployment rejects altered, expired, or
+untested source. Vela's GitHub token stays on the Nano.
 
 To contribute to someone else's repo she forks it, writes to a branch on the
 fork, and opens the PR upstream — all through the API. Every action is
@@ -197,10 +205,18 @@ write code, run it, install libraries, and push to her own GitHub — a shell +
 `GITHUB_TOKEN` (her account).
 
 Vela can build Ruby on Rails applications from her private production
-foundation. Repository-sized builds are streamed to Holodeck without exposing
-the GitHub token: `verify_repo` runs the Docker `test` target and final-image
-compile, then returns a one-hour receipt tied to the exact commit archive;
-`deploy_repo` refuses changed, expired, or unverified source.
+foundation. It includes PostgreSQL-oriented production checks, a
+server-authoritative storefront and Stripe Checkout/webhook foundation, and
+Google/GitHub OAuth linking that does not merge accounts merely because an
+email address matches. These are secure starting contracts, not a claim that
+tax, shipping, inventory, fraud policy, or a merchant's production credentials
+have already been configured.
+
+`verify_repo` runs the Docker `test` target and final-image compile;
+`deploy_repo` refuses changed, expired, or unverified source. Stripe sandbox
+and OAuth previews require their corresponding host-side test credentials and
+runtime connectivity. Production credentials belong on the self-hoster's
+machine and are never committed or requested in Discord.
 Set `NANOCLAW_RAILS_TEMPLATE=owner/private-template` to enable the GitHub
 tool's `create_rails_app` action. The foundation repository remains private,
 but every resulting app repository is public so people can fork it and deploy

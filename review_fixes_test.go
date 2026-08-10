@@ -172,6 +172,37 @@ func TestReadOnlyToolsExcludeSideEffects(t *testing.T) {
 	}
 }
 
+func TestRailsIsAFirstClassBuildTarget(t *testing.T) {
+	for _, want := range []string{
+		"private Vela Rails foundation",
+		"run verify_repo",
+		"deploy that exact commit",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("Rails build guidance missing %q", want)
+		}
+	}
+
+	cfg := testCfg(t)
+	cfg.Coders = map[string]bool{"coder": true}
+	cfg.GitHubToken = "github-token"
+	cfg.SandboxURL = "https://demo.example"
+	cfg.SandboxToken = "sandbox-token"
+	cfg.SandboxSecret = "sandbox-secret"
+	found := false
+	for _, d := range toolDefs(cfg) {
+		if d.Function.Name == "verify_repo" {
+			found = true
+			if !strings.Contains(d.Function.Description, "deployable final image") {
+				t.Fatal("repository verifier must compile the final image")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("repository verifier missing from configured tool belt")
+	}
+}
+
 func TestCritiqueConvergenceStopsEarly(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

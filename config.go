@@ -120,6 +120,7 @@ type Config struct {
 	Grok          *GrokAuth // SuperGrok / X Premium+ OAuth (device-code); set in LoadConfig
 	Workspace     string    // where code lives + shell runs
 	GitHubToken   string    // GITHUB_TOKEN — enables authenticated push
+	RailsTemplate string    // NANOCLAW_RAILS_TEMPLATE — private owner/repo used by create_rails_app
 	GitName       string    // commit identity (Vela's own account)
 	GitEmail      string
 	Secrets       *SecretStore // ephemeral deploy-key store (never in prompt/history)
@@ -189,6 +190,7 @@ func LoadConfig() (*Config, error) {
 		XAIVideoModel: get("XAI_VIDEO_MODEL", "grok-imagine-video-1.5"),
 		Workspace:     get("NANOCLAW_WORKSPACE", ""),
 		GitHubToken:   get("GITHUB_TOKEN", ""),
+		RailsTemplate: get("NANOCLAW_RAILS_TEMPLATE", ""),
 		GitName:       get("GIT_NAME", "Vela"),
 		GitEmail:      get("GIT_EMAIL", ""),
 		RequestsForum: get("NANOCLAW_REQUESTS_FORUM", "requests"),

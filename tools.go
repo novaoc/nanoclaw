@@ -115,25 +115,35 @@ func toolDefs(cfg *Config) []ToolDef {
 		defs = append(defs, mk("github",
 			"Create and populate GitHub repos, open pull requests, and PUBLISH LIVE WEBSITES via the API, as Vela's own account. This is API-ONLY — nothing runs on the box. Actions: "+
 				"create_repo {name, description?, private?} — makes a repo (with a README); "+
+				"create_rails_app {name, description?} — creates an ALWAYS-PRIVATE app from Vela's configured production Rails foundation; "+
 				"put_file {repo, path, content, message?, branch?} — writes/commits a file (repo is 'name' for Vela's own or 'owner/name'); "+
 				"open_pr {repo:'owner/name', title, head, base?, body?} — head is 'branch' (same repo) or 'forkowner:branch' (from a fork); "+
 				"fork {repo:'owner/name'}; "+
 				"enable_pages {repo} — turns on GitHub Pages and returns the live URL. "+
 				"TO DEPLOY A SITE someone asks to put online: create_repo (public) → put_file index.html (self-contained HTML) → enable_pages → give them the live link (takes ~a minute to go live). "+
 				"To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
-			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|put_file|open_pr|fork"},"name":{"type":"string"},"description":{"type":"string"},"private":{"type":"boolean"},"repo":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
+			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|put_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"private":{"type":"boolean"},"repo":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
 	if cfg.SandboxURL != "" && cfg.SandboxToken != "" && cfg.SandboxSecret != "" { // holodeck demo hosting
 		defs = append(defs, mk("deploy_demo",
 			"Deploy an app YOU built to Vela's own demo host and get a LIVE URL on her domain. Use when someone wants a working demo online — the flow for 'make me X' is: build it, push the code to a repo (github tool), AND deploy_demo so they get both the repo and a live link. "+
-				"TWO kinds: (a) STATIC — include an index.html at the root (self-contained or relative-linked assets); (b) REAL APP (Node/Python/Go/…) — include a Dockerfile plus the source, and holodeck builds and runs it in a locked-down container (no internet egress at runtime, so bundle deps at build time; EXPOSE the port or pass it as `port`). "+
+				"TWO kinds: (a) STATIC — include an index.html at the root (self-contained or relative-linked assets); (b) REAL APP (Ruby on Rails, Node, Python, Go, …) — include a Dockerfile plus the source, and holodeck builds and runs it in a locked-down container (no internet egress at runtime, so bundle deps at build time; EXPOSE the port or pass it as `port`). "+
 				"ONLY deploy apps you built yourself in this workflow — never clone-and-host someone else's repo. The whole deck WIPES DAILY at 3AM Mexico City (say so when sharing the link); the GitHub repo is the permanent copy.",
 			`{"type":"object","properties":{"name":{"type":"string","description":"short app name — becomes the subdomain slug"},"port":{"type":"integer","description":"container app's listen port (optional; else EXPOSE or 8080)"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string","description":"relative path, e.g. index.html, Dockerfile, src/app.js"},"content":{"type":"string"}},"required":["path","content"]}}},"required":["name","files"]}`))
+		if cfg.CodeEnabled() && cfg.GithubEnabled() {
+			defs = append(defs,
+				mk("verify_repo",
+					"Build and test a whole GitHub repository on Holodeck's disposable build server instead of the tiny Nano. Coder-only. Downloads with Vela's token (private repos work), streams source without exposing the token, builds the Dockerfile's `test` target and deployable final image, then returns bounded logs plus a signed one-hour receipt tied to the exact commit/archive. Use after pushing code and BEFORE deploy_repo. Args: repo='name' or 'owner/name'; ref optional branch/SHA; target defaults to test; dockerfile defaults to Dockerfile.",
+					`{"type":"object","properties":{"repo":{"type":"string"},"ref":{"type":"string","description":"branch/tag/SHA; defaults to repository default branch"},"name":{"type":"string","description":"build display name; defaults to repo"},"target":{"type":"string","description":"Docker build target; defaults to test"},"dockerfile":{"type":"string","description":"Dockerfile path; defaults to Dockerfile"}},"required":["repo"]}`),
+				mk("deploy_repo",
+					"Deploy an entire GitHub repository to Holodeck, coder-only. REQUIRES the exact commit SHA and signed receipt returned by a successful verify_repo test-stage build; Holodeck rejects changed, expired, or untested source. Use for real multi-file apps that are too large for deploy_demo. Runtime remains locked down with no internet egress and the whole deck wipes daily.",
+					`{"type":"object","properties":{"repo":{"type":"string"},"name":{"type":"string","description":"app/display name"},"ref":{"type":"string","description":"exact commit SHA returned by verify_repo"},"receipt":{"type":"string","description":"signed receipt returned by verify_repo"},"port":{"type":"integer","description":"listen port; otherwise root Dockerfile EXPOSE or 8080"}},"required":["repo","name","ref","receipt"]}`))
+		}
 	}
 	if cfg.CodeEnabled() { // gated to the coder allowlist (NANOCLAW_CODERS)
 		defs = append(defs,
 			mk("shell",
-				"Run a shell command in your code workspace (persists across turns). Use for git (clone/commit/push to your GitHub), installing libraries, running builds/tests, scaffolding. 180s timeout. You run on a 256MB single-core RISC-V board — keep it light; for heavy builds, push and let CI compile. NOTE: code and web fetches can't run in the same turn (injection guard) — if you need to research first, do it in a separate message, then run code.",
+				"Run a shell command in your code workspace (persists across turns). Use for git, libraries, builds, tests, and scaffolding. 180s timeout. You run on a memory-limited single-core RISC-V board; keep local work light and use verify_repo for heavy repository builds. NOTE: code and web fetches can't run in the same turn (injection guard) — if you need to research first, do it in a separate message, then run code.",
 				`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`),
 			mk("write_file",
 				"Write a file in your workspace (creates dirs). Prefer this over shell heredocs for writing code.",
@@ -184,6 +194,7 @@ func critiqueTools(cfg *Config, haveArtifact bool) []ToolDef {
 type toolArgs struct {
 	Query, URL, Name, Content, Note, Command, Path, Game, Set           string
 	Action, Description, Repo, Message, Branch, Title, Head, Base, Body string
+	Ref, Target, Dockerfile, Receipt                                    string
 	Kind, Number, Symbol, Source                                        string
 	User, Reason, Channel, Thread, Duration                             string // moderation + forum
 	Prompt                                                              string // xAI image/video gen
@@ -243,7 +254,7 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// arbitrary outbound GET — after a code turn (which can read env/tokens) it
 	// would otherwise be an exfiltration channel via the URL.
 	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart" || name == "attach_image" || name == "model_releases" || name == "generate_image" || name == "generate_video"
-	code := name == "shell" || name == "write_file" || name == "read_file" || name == "github"
+	code := name == "shell" || name == "write_file" || name == "read_file" || name == "github" || name == "verify_repo" || name == "deploy_repo"
 	if web && tc.usedCode {
 		return "REFUSED: web fetch blocked — this turn already ran code or a GitHub write, and untrusted page content must not mix with those. Do the browsing in a separate message."
 	}
@@ -300,6 +311,10 @@ func (tc *ToolCtx) Run(name, args string) string {
 		return tc.runGithub(a)
 	case "deploy_demo":
 		return tc.deployDemo(a)
+	case "verify_repo":
+		return tc.verifyRepo(a)
+	case "deploy_repo":
+		return tc.deployRepo(a)
 	case "shell":
 		return tc.runShell(a.Command)
 	case "write_file":

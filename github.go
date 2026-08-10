@@ -10,7 +10,11 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // github.go — an API-ONLY GitHub tool: create repos, write files, open PRs,
@@ -19,6 +23,10 @@ import (
 // Vela's own token and act as her account; every call is audit-logged.
 
 const ghAPI = "https://api.github.com"
+
+const maxRepoArchive = 96 << 20
+
+var repoPartRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 // ghEsc escapes a repo path or branch name segment-by-segment (slashes kept),
 // so a name containing '#', '?', or spaces can't be reinterpreted as URL
@@ -51,6 +59,14 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 			return "github error: create_repo needs a name"
 		}
 		return gh.createRepo(a.Name, a.Description, a.Private)
+	case "create_rails_app":
+		if a.Name == "" {
+			return "github error: create_rails_app needs a name"
+		}
+		if tc.cfg.RailsTemplate == "" {
+			return "the private Vela Rails foundation isn't configured on this instance"
+		}
+		return gh.createFromTemplate(tc.cfg.RailsTemplate, a.Name, a.Description)
 	case "put_file":
 		if a.Repo == "" || a.Path == "" {
 			return "github error: put_file needs repo and path"
@@ -72,7 +88,7 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		}
 		return gh.enablePages(a.Repo)
 	}
-	return "github error: unknown action " + a.Action + " (use create_repo|put_file|open_pr|fork|enable_pages)"
+	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|put_file|open_pr|fork|enable_pages)"
 }
 
 type ghClient struct {
@@ -150,6 +166,116 @@ func (g *ghClient) login() (string, error) {
 	return login, nil
 }
 
+func (g *ghClient) resolveRepo(repo string) (string, string, error) {
+	repo = strings.TrimSpace(repo)
+	owner := ""
+	name := repo
+	if strings.Contains(repo, "/") {
+		parts := strings.Split(repo, "/")
+		if len(parts) != 2 {
+			return "", "", fmt.Errorf("repo must be 'name' or 'owner/name'")
+		}
+		owner, name = parts[0], parts[1]
+	} else {
+		var err error
+		owner, err = g.login()
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if !repoPartRe.MatchString(owner) || !repoPartRe.MatchString(name) {
+		return "", "", fmt.Errorf("invalid repository name")
+	}
+	return owner, name, nil
+}
+
+// downloadArchive resolves ref to an immutable commit SHA, then downloads the
+// repository tarball to a 0600 temporary file. The GitHub token stays in the
+// request header and never enters a URL, command line, tool result, or log.
+func (g *ghClient) downloadArchive(repo, ref, tempDir string) (string, string, error) {
+	owner, name, err := g.resolveRepo(repo)
+	if err != nil {
+		return "", "", err
+	}
+	if ref == "" {
+		info, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s", owner, name), nil)
+		if err != nil {
+			return "", "", err
+		}
+		if st >= 400 {
+			return "", "", errors.New(ghErr(info, st))
+		}
+		ref, _ = info["default_branch"].(string)
+		if ref == "" {
+			ref = "main"
+		}
+	}
+	commit, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s/commits/%s", owner, name, url.PathEscape(ref)), nil)
+	if err != nil {
+		return "", "", err
+	}
+	if st >= 400 {
+		return "", "", errors.New(ghErr(commit, st))
+	}
+	sha, _ := commit["sha"].(string)
+	if len(sha) != 40 {
+		return "", "", fmt.Errorf("GitHub did not resolve %s to a commit", ref)
+	}
+
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/repos/%s/%s/tarball/%s", ghAPI, owner, name, sha), nil)
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "nanoclaw")
+	client := *ssrfClient
+	client.Timeout = 2 * time.Minute
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", "", fmt.Errorf("GitHub %d: %.1000s", resp.StatusCode, raw)
+	}
+	if resp.ContentLength > maxRepoArchive {
+		return "", "", fmt.Errorf("repository archive exceeds %dMB", maxRepoArchive>>20)
+	}
+	if err := os.MkdirAll(tempDir, 0o700); err != nil {
+		return "", "", err
+	}
+	f, err := os.CreateTemp(tempDir, "repo-*.tar.gz")
+	if err != nil {
+		return "", "", err
+	}
+	path := filepath.Clean(f.Name())
+	ok := false
+	defer func() {
+		_ = f.Close()
+		if !ok {
+			_ = os.Remove(path)
+		}
+	}()
+	if err := f.Chmod(0o600); err != nil {
+		return "", "", err
+	}
+	n, err := io.Copy(f, io.LimitReader(resp.Body, maxRepoArchive+1))
+	if err != nil {
+		return "", "", err
+	}
+	if n == 0 || n > maxRepoArchive {
+		return "", "", fmt.Errorf("repository archive is empty or exceeds %dMB", maxRepoArchive>>20)
+	}
+	if err := f.Sync(); err != nil {
+		return "", "", err
+	}
+	ok = true
+	return path, sha, nil
+}
+
 func (g *ghClient) createRepo(name, desc string, private bool) string {
 	m, st, err := g.do("POST", "/user/repos", map[string]any{
 		"name": name, "description": desc, "private": private, "auto_init": true,
@@ -162,6 +288,32 @@ func (g *ghClient) createRepo(name, desc string, private bool) string {
 	}
 	url, _ := m["html_url"].(string)
 	return fmt.Sprintf("created repo %s", url)
+}
+
+// createFromTemplate creates an always-private repository from Vela's private
+// Rails foundation. The configured template name stays out of the model prompt
+// and result; callers only need to choose the new application's name.
+func (g *ghClient) createFromTemplate(template, name, desc string) string {
+	owner, repo, err := g.resolveRepo(template)
+	if err != nil {
+		return "couldn't resolve the Rails foundation — " + err.Error()
+	}
+	destinationOwner, err := g.login()
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	m, st, err := g.do("POST", fmt.Sprintf("/repos/%s/%s/generate", owner, repo), map[string]any{
+		"owner": destinationOwner, "name": name, "description": desc,
+		"private": true, "include_all_branches": false,
+	})
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	if st >= 400 {
+		return "couldn't create Rails app — " + ghErr(m, st)
+	}
+	u, _ := m["html_url"].(string)
+	return fmt.Sprintf("created private Rails app %s from Vela's production foundation", u)
 }
 
 func (g *ghClient) fork(repoFull string) string {

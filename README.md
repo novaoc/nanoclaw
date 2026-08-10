@@ -196,6 +196,15 @@ write code, run it, install libraries, and push to her own GitHub — a shell +
 `write_file`/`read_file` in a persistent workspace, `git` authenticated by
 `GITHUB_TOKEN` (her account).
 
+Vela can build Ruby on Rails applications from her private production
+foundation. Repository-sized builds are streamed to Holodeck without exposing
+the GitHub token: `verify_repo` runs the Docker `test` target and final-image
+compile, then returns a one-hour receipt tied to the exact commit archive;
+`deploy_repo` refuses changed, expired, or unverified source.
+Set `NANOCLAW_RAILS_TEMPLATE=owner/private-template` to enable the GitHub
+tool's `create_rails_app` action; it always creates the resulting app as a
+private repository.
+
 > **@vela** clone my repo, add a /health endpoint, run the tests, commit and push
 
 **This is root-level trust.** A shell can read the process environment and any

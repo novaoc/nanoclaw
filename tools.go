@@ -151,6 +151,7 @@ func toolDefs(cfg *Config) []ToolDef {
 				"list_tree {repo, ref?, path?} — list paths only when you need structure, not contents; "+
 				"read_files {repo, paths:[up to 3], ref?, start_line?, end_line?} — read files you will edit (not symbol hunt; use search_code). Optional 1-based line range; omit for whole file. Large files return a window plus the exact next-range call — never fetch_url/shell for repo files; "+
 				"patch_file {repo, path, ops, message?, branch?} — targeted edits (same ops as apply_patch: replace|insert_after|insert_before|delete; each find must match exactly once or nothing is committed). Prefer for small edits; "+
+				"NEVER write db/schema.rb, db/structure.sql, or a lockfile — they are generated; add a migration under db/migrate/ or change the Gemfile instead; "+
 				"put_file {repo, path, content, message?, branch?} — REPLACES THE ENTIRE FILE and commits (new files or full rewrites only; repo is 'name' or 'owner/name'); "+
 				"delete_file {repo, path, message?, branch?} — deletes one file from a Vela-owned repository without shell/curl; "+
 				"open_pr {repo:'owner/name', title, head, base?, body?} — head is 'branch' (same repo) or 'forkowner:branch' (from a fork); "+

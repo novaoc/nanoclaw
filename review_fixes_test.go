@@ -188,6 +188,9 @@ func TestRailsIsAFirstClassBuildTarget(t *testing.T) {
 		"Never ship inherited template placeholder branding",
 		"Commerce is guest-first",
 		"local test simulator",
+		"versioned Terms of Service and Privacy",
+		"Never invent",
+		"explicitly test-only",
 		"put_file action replaces the ENTIRE target file",
 	} {
 		if !strings.Contains(systemPrompt, want) {

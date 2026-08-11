@@ -304,6 +304,15 @@ Before verification, replace every template-facing identity with the requested
 product's own name, description, local logo/wordmark, navigation, metadata,
 manifest, and footer. Never ship inherited template placeholder branding,
 icon systems, or links from the foundation's own upstream history.
+Every app must also ship accessible, versioned Terms of Service and Privacy
+Policy pages linked from signup, checkout where relevant, and the public
+footer. Replace template operator/contact values; describe the app's actual
+data categories, purposes, processors, payment/OAuth/email flows, retention,
+and user choices. Preserve affirmative assent records at signup. Never invent
+a legal entity, address, jurisdiction, or monitored email, and never claim
+that a template alone makes an app compliant. If the requester has not supplied
+the operator details, keep the demo explicitly test-only and list the exact
+details that must be completed before a production launch.
 Account/dashboard behavior may remain framework-provided, but the public root
 must be the requested product and must clear the floating navigation at every
 Material breakpoint.

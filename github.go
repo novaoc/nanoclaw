@@ -154,6 +154,9 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		if len(a.Ops) == 0 {
 			return "github error: patch_file needs a non-empty ops array"
 		}
+		if why := refuseGeneratedArtifact(a.Path); why != "" {
+			return "github error: " + why
+		}
 		tc.usedCode = true
 		tc.ensureGHCache()
 		gh.cache = tc.ghCache
@@ -161,6 +164,9 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 	case "put_file":
 		if a.Repo == "" || a.Path == "" {
 			return "github error: put_file needs repo and path"
+		}
+		if why := refuseGeneratedArtifact(a.Path); why != "" {
+			return "github error: " + why
 		}
 		tc.usedCode = true
 		tc.ensureGHCache()

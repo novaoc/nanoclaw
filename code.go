@@ -84,6 +84,9 @@ func (tc *ToolCtx) runShell(command string) string {
 }
 
 func (tc *ToolCtx) writeWorkspaceFile(path, content string) string {
+	if why := refuseGeneratedArtifact(path); why != "" {
+		return "write error: " + why
+	}
 	if g := tc.codeGate(); g != "" {
 		return g
 	}
@@ -258,6 +261,9 @@ type patchOp struct {
 }
 
 func (tc *ToolCtx) applyPatch(path string, ops []patchOp) string {
+	if why := refuseGeneratedArtifact(path); why != "" {
+		return "patch error: " + why
+	}
 	if g := tc.codeGate(); g != "" {
 		return g
 	}

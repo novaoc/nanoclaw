@@ -37,6 +37,39 @@ type ToolCtx struct {
 	repoReads int  // focused GitHub inspection calls; bounded to prevent analysis loops
 	ghCache   *ghRepoCache // turn-scoped GitHub tree/blob cache for remote search
 	appSpec   *AppSpec     // structured build specification for the current turn/job
+	// notify posts a mid-turn status message (supplied by Discord). Nil in eval.
+	notify func(text string)
+	// deadline is the real per-turn budget from turnDeadline — interim messages
+	// read this instead of hardcoding a duration.
+	deadline time.Duration
+	// gh, when set, is used instead of newGH (tests inject a stub client).
+	gh *ghClient
+}
+
+// buildStartedMessage is the one-shot interim line posted when a Rails app
+// scaffold begins. Minutes come from the turn's real deadline (ceil), phrased
+// as an upper bound — not a promise of exactly N.
+func buildStartedMessage(name string, deadline time.Duration) string {
+	mins := int((deadline + time.Minute - 1) / time.Minute)
+	if mins < 1 {
+		mins = 1
+	}
+	label := strings.TrimSpace(name)
+	if label == "" {
+		label = "the app"
+	}
+	return fmt.Sprintf("Building %s — up to about %d minutes. I'll post the repository and demo when it's verified.", label, mins)
+}
+
+// notifyBuildStarted posts (or logs) the interim build message. Safe when
+// notify is nil — eval and other headless paths proceed silently.
+func (tc *ToolCtx) notifyBuildStarted(name string) {
+	msg := buildStartedMessage(name, tc.deadline)
+	if tc.notify == nil {
+		log.Printf("build started (no channel notifier): %s", msg)
+		return
+	}
+	tc.notify(msg)
 }
 
 // phaseBoundary is an attempted web↔code transition. The tool stays blocked,

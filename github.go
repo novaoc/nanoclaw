@@ -50,7 +50,10 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 	if !tc.cfg.RepoAllowed(tc.authorID) {
 		return "REFUSED: the GitHub tool is limited to an allowlist (VELA_REPO_USERS) on this server, and this user isn't on it. Tell them plainly."
 	}
-	gh := newGH(tc.cfg)
+	gh := tc.gh
+	if gh == nil {
+		gh = newGH(tc.cfg)
+	}
 	if gh == nil {
 		return "github isn't configured on this instance (no token)."
 	}
@@ -80,6 +83,9 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		if !strings.HasPrefix(out, "created Rails app") {
 			return out
 		}
+		// One interim channel message per successful scaffold — not on failure,
+		// not on ordinary tool calls. Time bound comes from the real turn deadline.
+		tc.notifyBuildStarted(a.Name)
 		// Shaping is mechanical and must not depend on the model calling a
 		// separate step: stamp identity, write app README, omit unselected modules.
 		shapeOut := gh.shapeGeneratedApp(a.Name, tc.appSpec, tc.cfg)

@@ -560,6 +560,27 @@ type Turn struct {
 	Author    string
 	ImageURLs []string
 	Ambient   bool // unprompted chime-in: short, cheap, and silence is allowed
+	// Notify posts a mid-turn status line (Discord). Optional — nil in eval/headless.
+	Notify func(text string)
+}
+
+// turnDeadline is the per-turn context timeout. Shared so interim status
+// messages report the same budget the run loop actually uses — do not
+// duplicate this formula elsewhere.
+func turnDeadline(toolIters, passes int, coder bool) time.Duration {
+	perIteration := 30 * time.Second
+	maxDeadline := 12 * time.Minute
+	if coder {
+		perIteration = 90 * time.Second
+		maxDeadline = 30 * time.Minute
+	}
+	dl := time.Duration(toolIters*passes) * perIteration
+	if dl < 3*time.Minute {
+		dl = 3 * time.Minute
+	} else if dl > maxDeadline {
+		dl = maxDeadline
+	}
+	return dl
 }
 
 func NewAgent(cfg *Config) *Agent {
@@ -691,18 +712,7 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 	// mid-flight with "turn deadline reached" — the thirty-minute allowance
 	// below was unreachable, because the derived value never grew large enough
 	// to be clamped by it.
-	perIteration := 30 * time.Second
-	maxDeadline := 12 * time.Minute
-	if a.cfg.Coders[authorID] {
-		perIteration = 90 * time.Second
-		maxDeadline = 30 * time.Minute
-	}
-	dl := time.Duration(toolIters*passes) * perIteration
-	if dl < 3*time.Minute {
-		dl = 3 * time.Minute
-	} else if dl > maxDeadline {
-		dl = maxDeadline
-	}
+	dl := turnDeadline(toolIters, passes, a.cfg.Coders[authorID])
 	ctx, cancel := context.WithTimeout(context.Background(), dl)
 	defer cancel()
 
@@ -717,6 +727,7 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 	tc := &ToolCtx{
 		cfg: a.cfg, authorID: authorID, author: author, request: originalRequest,
 		guildID: t.GuildID, channelID: channelID, disc: a.disc,
+		notify: t.Notify, deadline: dl,
 	}
 	sys := fmt.Sprintf(systemPrompt, modelDesc(a.cfg), orNone(readMemory(a.cfg)))
 	// 2.0 social context: who this person is to Vela, and how this channel
@@ -763,6 +774,7 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 				cfg: a.cfg, authorID: authorID, author: author, request: originalRequest,
 				guildID: t.GuildID, channelID: channelID, disc: a.disc, Artifacts: artifacts,
 				usedCode: true, repoReads: repoReads, ghCache: ghCache, appSpec: appSpec,
+				notify: t.Notify, deadline: dl,
 			}
 			final, messages, ok = a.toolLoop(ctx, messages, tc, toolIters, toolDefs(a.cfg))
 			continue
@@ -799,6 +811,7 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 		tc = &ToolCtx{
 			cfg: a.cfg, authorID: authorID, author: author, request: originalRequest,
 			guildID: t.GuildID, channelID: channelID, disc: a.disc, Artifacts: artifacts,
+			notify: t.Notify, deadline: dl,
 		}
 		final, messages, ok = a.toolLoop(ctx, messages, tc, toolIters, toolDefs(a.cfg))
 	}

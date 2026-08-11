@@ -280,7 +280,15 @@ func (b *Bot) onDiveCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 		defer atomic.AddInt32(&b.pending, -1)
 		b.locks <- struct{}{}
 		defer func() { <-b.locks }()
-		reply := b.agent.DiveTurn(Turn{ChannelID: i.ChannelID, GuildID: i.GuildID, AuthorID: authorID, Author: author}, task)
+		chID := i.ChannelID
+		reply := b.agent.DiveTurn(Turn{
+			ChannelID: chID, GuildID: i.GuildID, AuthorID: authorID, Author: author,
+			Notify: func(text string) {
+				if _, err := b.PostMessage(chID, text); err != nil {
+					log.Printf("mid-turn notify: %v", err)
+				}
+			},
+		}, task)
 		chunks := splitMessage("🌀 **dive**: "+task+"\n\n"+reply.Text, 1990)
 		for n, chunk := range chunks {
 			params := &discordgo.WebhookParams{Content: chunk}
@@ -409,10 +417,16 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 				}
 			}
 		}()
+		chID := m.ChannelID
 		reply := b.agent.HandleTurn(Turn{
-			ChannelID: m.ChannelID, GuildID: m.GuildID,
+			ChannelID: chID, GuildID: m.GuildID,
 			AuthorID: m.Author.ID, Author: m.Author.Username, ImageURLs: images,
 			Ambient: ambient,
+			Notify: func(text string) {
+				if _, err := b.PostMessage(chID, text); err != nil {
+					log.Printf("mid-turn notify: %v", err)
+				}
+			},
 		}, content)
 		close(stop)
 		if ambient {

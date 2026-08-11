@@ -497,7 +497,10 @@ func (s *shapeStub) handle(w http.ResponseWriter, r *http.Request, _ *ghTestEnv)
 			"sha":     sha,
 			"content": base64.StdEncoding.EncodeToString([]byte(content)),
 		})
-	case r.URL.Path == repoPrefix+"/git/ref/heads/main" && r.Method == http.MethodPatch:
+	// GitHub updates a ref at the PLURAL path. Accepting a PATCH on the
+	// singular read path here is what let the 404 ship: the stub was more
+	// forgiving than the API.
+	case r.URL.Path == repoPrefix+"/git/refs/heads/main" && r.Method == http.MethodPatch:
 		s.refPatched = true
 		writeJSON(w, 200, map[string]any{"object": map[string]any{"sha": "new-commit"}})
 	case r.URL.Path == repoPrefix+"/git/ref/heads/main":

@@ -210,8 +210,12 @@ func ownedByAny(declared map[string]*ModuleManifest, path string) bool {
 
 // commitShapePlan creates one commit with all writes and deletes via Git Data API.
 func (g *ghClient) commitShapePlan(owner, name, branch, message string, plan *ShapePlan) error {
-	refPath := fmt.Sprintf("/repos/%s/%s/git/ref/heads/%s", owner, name, ghEsc(branch))
-	ref, st, err := g.do("GET", refPath, nil)
+	// GitHub reads a single ref at /git/ref/{ref} and updates one at
+	// /git/refs/{ref}. Reusing the read path for the update 404s, which
+	// silently defeated shaping: the commit was built and then never landed.
+	readRefPath := fmt.Sprintf("/repos/%s/%s/git/ref/heads/%s", owner, name, ghEsc(branch))
+	updateRefPath := fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s", owner, name, ghEsc(branch))
+	ref, st, err := g.do("GET", readRefPath, nil)
 	if err != nil {
 		return err
 	}
@@ -289,7 +293,7 @@ func (g *ghClient) commitShapePlan(owner, name, branch, message string, plan *Sh
 		return fmt.Errorf("create commit: empty sha")
 	}
 
-	upd, st, err := g.do("PATCH", refPath, map[string]any{"sha": commitSHA})
+	upd, st, err := g.do("PATCH", updateRefPath, map[string]any{"sha": commitSHA})
 	if err != nil {
 		return err
 	}

@@ -932,7 +932,15 @@ func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budge
 			// Log the head of every result. Without it a failing tool is
 			// invisible in the log — only the call is recorded — and a build
 			// that quietly retries the same broken step looks like progress.
-			log.Printf("  -> %s: %.180s", call.Function.Name, strings.ReplaceAll(result, "\n", " "))
+			flat := strings.ReplaceAll(result, "\n", " ")
+			// Errors are logged whole: a truncated failure message is the one
+			// thing a log must never do, since it hides the reason a build
+			// stalled behind an ellipsis.
+			if strings.Contains(flat, "error") || strings.Contains(flat, "failed") {
+				log.Printf("  -> %s: %.900s", call.Function.Name, flat)
+			} else {
+				log.Printf("  -> %s: %.180s", call.Function.Name, flat)
+			}
 			messages = append(messages, Msg{Role: "tool", ToolCallID: call.ID, Content: result})
 			if tc.boundary != nil {
 				messages = answerUnrunToolCalls(messages, msg.ToolCalls[i+1:])

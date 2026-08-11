@@ -929,6 +929,10 @@ func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budge
 		for i, call := range msg.ToolCalls {
 			log.Printf("tool %s(%.120s)", call.Function.Name, call.Function.Arguments)
 			result := clip(tc.Run(call.Function.Name, call.Function.Arguments), toolResultBudget)
+			// Log the head of every result. Without it a failing tool is
+			// invisible in the log — only the call is recorded — and a build
+			// that quietly retries the same broken step looks like progress.
+			log.Printf("  -> %s: %.180s", call.Function.Name, strings.ReplaceAll(result, "\n", " "))
 			messages = append(messages, Msg{Role: "tool", ToolCallID: call.ID, Content: result})
 			if tc.boundary != nil {
 				messages = answerUnrunToolCalls(messages, msg.ToolCalls[i+1:])

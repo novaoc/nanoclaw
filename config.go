@@ -92,7 +92,7 @@ type Config struct {
 	DataDir       string
 	FocusChannels map[string]bool // channel IDs answered without a mention
 	MaxToolIters  int
-	Concurrency   int // max turns running at once; 1 = strict queue (RAM-safe on the Nano)
+	Concurrency   int // max ordinary turns at once (not builds); 1 = strict queue (RAM-safe on the Nano)
 	HistoryTurns  int
 	Passes        int    // self-review passes on normal turns; 1 = answer once, no loop
 	DiveToolIters int    // /dive gets a bigger tool budget…
@@ -178,7 +178,9 @@ func LoadConfig() (*Config, error) {
 		DataDir:       get("NANOCLAW_DATA", "data"),
 		FocusChannels: map[string]bool{},
 		MaxToolIters:  clampInt(get("NANOCLAW_MAX_ITERS", ""), 20, 4, 40),
-		Concurrency:   clampInt(get("NANOCLAW_CONCURRENCY", ""), 1, 1, 4),
+		// Ordinary-lane size only (builds use a separate capacity-1 lane).
+		// Default 1 keeps the Nano's free RAM safe under concurrent load.
+		Concurrency: clampInt(get("NANOCLAW_CONCURRENCY", ""), 1, 1, 4),
 		HistoryTurns:  24,
 		// Normal turns answer ONCE — looping-by-default made every reply feel
 		// slow on a texting surface. The looper play lives in /dive, which

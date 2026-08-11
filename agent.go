@@ -562,6 +562,9 @@ type Turn struct {
 	Ambient   bool // unprompted chime-in: short, cheap, and silence is allowed
 	// Notify posts a mid-turn status line (Discord). Optional — nil in eval/headless.
 	Notify func(text string)
+	// SetBuildName updates the live build-lane label (for /request status).
+	// Optional — nil outside Discord coder turns.
+	SetBuildName func(name string)
 }
 
 // turnDeadline is the per-turn context timeout. Shared so interim status
@@ -727,7 +730,7 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 	tc := &ToolCtx{
 		cfg: a.cfg, authorID: authorID, author: author, request: originalRequest,
 		guildID: t.GuildID, channelID: channelID, disc: a.disc,
-		notify: t.Notify, deadline: dl,
+		notify: t.Notify, setBuildName: t.SetBuildName, deadline: dl,
 	}
 	sys := fmt.Sprintf(systemPrompt, modelDesc(a.cfg), orNone(readMemory(a.cfg)))
 	// 2.0 social context: who this person is to Vela, and how this channel
@@ -774,7 +777,7 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 				cfg: a.cfg, authorID: authorID, author: author, request: originalRequest,
 				guildID: t.GuildID, channelID: channelID, disc: a.disc, Artifacts: artifacts,
 				usedCode: true, repoReads: repoReads, ghCache: ghCache, appSpec: appSpec,
-				notify: t.Notify, deadline: dl,
+				notify: t.Notify, setBuildName: t.SetBuildName, deadline: dl,
 			}
 			final, messages, ok = a.toolLoop(ctx, messages, tc, toolIters, toolDefs(a.cfg))
 			continue
@@ -811,7 +814,7 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 		tc = &ToolCtx{
 			cfg: a.cfg, authorID: authorID, author: author, request: originalRequest,
 			guildID: t.GuildID, channelID: channelID, disc: a.disc, Artifacts: artifacts,
-			notify: t.Notify, deadline: dl,
+			notify: t.Notify, setBuildName: t.SetBuildName, deadline: dl,
 		}
 		final, messages, ok = a.toolLoop(ctx, messages, tc, toolIters, toolDefs(a.cfg))
 	}

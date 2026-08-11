@@ -39,6 +39,9 @@ type ToolCtx struct {
 	appSpec   *AppSpec     // structured build specification for the current turn/job
 	// notify posts a mid-turn status message (supplied by Discord). Nil in eval.
 	notify func(text string)
+	// setBuildName updates the build-lane label while a coder turn runs (so
+	// /request can name what is building). Nil outside Discord.
+	setBuildName func(name string)
 	// deadline is the real per-turn budget from turnDeadline — interim messages
 	// read this instead of hardcoding a duration.
 	deadline time.Duration
@@ -61,9 +64,13 @@ func buildStartedMessage(name string, deadline time.Duration) string {
 	return fmt.Sprintf("Building %s — up to about %d minutes. I'll post the repository and demo when it's verified.", label, mins)
 }
 
-// notifyBuildStarted posts (or logs) the interim build message. Safe when
-// notify is nil — eval and other headless paths proceed silently.
+// notifyBuildStarted posts (or logs) the interim build message and refreshes
+// the build-lane label for /request status. Safe when callbacks are nil —
+// eval and other headless paths proceed silently.
 func (tc *ToolCtx) notifyBuildStarted(name string) {
+	if tc.setBuildName != nil {
+		tc.setBuildName(name)
+	}
 	msg := buildStartedMessage(name, tc.deadline)
 	if tc.notify == nil {
 		log.Printf("build started (no channel notifier): %s", msg)

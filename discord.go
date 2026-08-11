@@ -17,9 +17,13 @@ type Bot struct {
 	cfg     *Config
 	agent   *Agent
 	session *discordgo.Session
-	// global turn semaphore (cap = cfg.Concurrency, default 1) — how many turns
-	// run at once, RAM-safe on the Nano; others queue on it.
-	locks    chan struct{}
+	// ordinary turn semaphore (cap = cfg.Concurrency, default 1) — chat,
+	// research, grok. Builds do NOT take a slot here; they use build instead.
+	locks chan struct{}
+	// build is the single coder/build lane (capacity one). A long application
+	// build holds this so ordinary turns keep moving. /request refuses while
+	// it is occupied.
+	build    *buildLane
 	threads  *OwnedThreads // forum posts Vela created; replies are addressed to her
 	pending  int32         // in-flight + queued turns, to cap a spam pile-up (maxPending)
 	draining int32         // set on SIGTERM: finish in-flight turns, take no new ones
@@ -42,7 +46,8 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 		discordgo.IntentMessageContent | discordgo.IntentsDirectMessages
 	b := &Bot{
 		cfg: cfg, agent: agent, session: s,
-		locks: make(chan struct{}, cfg.Concurrency), threads: NewOwnedThreads(cfg),
+		locks: make(chan struct{}, cfg.Concurrency), build: newBuildLane(),
+		threads: NewOwnedThreads(cfg),
 	}
 	s.AddHandler(b.onMessage)
 	s.AddHandler(b.onReady)
@@ -185,6 +190,10 @@ func (b *Bot) onGrokCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 // onRequestCommand handles /request: frame the ask as a concrete goal (one
 // cheap model call), open a post in the requests forum, and point the
 // requester at the thread to continue the work there.
+//
+// While the build lane is occupied the command refuses immediately (ephemeral)
+// with what is building and how much of the tracked deadline remains — not
+// queued invisibly. Ordinary chat is unaffected; only /request is blocked.
 func (b *Bot) onRequestCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	task := strings.TrimSpace(i.ApplicationCommandData().Options[0].StringValue())
 	author, authorID := interactionUser(i)
@@ -194,6 +203,10 @@ func (b *Bot) onRequestCommand(s *discordgo.Session, i *discordgo.InteractionCre
 	}
 	if i.GuildID == "" {
 		ephemeral(s, i, "Requests need the server (the post goes in the requests forum) — run it there, not in a DM.")
+		return
+	}
+	if name, rem, ok := b.build.busy(); ok {
+		ephemeral(s, i, requestBusyMessage(name, rem))
 		return
 	}
 	fid, fname, _, err := b.ResolveChannel(i.GuildID, b.cfg.RequestsForum)
@@ -258,8 +271,8 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 }
 
 // onDiveCommand runs the deep loop: bigger tool budget + self-review passes.
-// Dives queue on the same semaphore as messages, so they respect the same OOM
-// guard — unbounded /dive spam would pile up goroutines like a message flood.
+// Dives take a lane (build lane for coders, ordinary otherwise) so they respect
+// the same OOM guard — unbounded /dive spam would pile up like a message flood.
 func (b *Bot) onDiveCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	task := i.ApplicationCommandData().Options[0].StringValue()
 	author, authorID := interactionUser(i)
@@ -278,8 +291,8 @@ func (b *Bot) onDiveCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 	})
 	go func() {
 		defer atomic.AddInt32(&b.pending, -1)
-		b.locks <- struct{}{}
-		defer func() { <-b.locks }()
+		release, _ := b.takeLane(authorID, task, b.cfg.DiveToolIters, b.cfg.DivePasses)
+		defer release()
 		chID := i.ChannelID
 		reply := b.agent.DiveTurn(Turn{
 			ChannelID: chID, GuildID: i.GuildID, AuthorID: authorID, Author: author,
@@ -288,6 +301,7 @@ func (b *Bot) onDiveCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 					log.Printf("mid-turn notify: %v", err)
 				}
 			},
+			SetBuildName: b.build.setName,
 		}, task)
 		chunks := splitMessage("🌀 **dive**: "+task+"\n\n"+reply.Text, 1990)
 		for n, chunk := range chunks {
@@ -316,6 +330,29 @@ func (b *Bot) onDiveCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 
 func (b *Bot) Start() error { return b.session.Open() }
 func (b *Bot) Close()       { _ = b.session.Close() }
+
+// takeLane reserves either the build lane (coder turns) or an ordinary slot.
+// Release is always safe to defer — including across panics — so a failed
+// build cannot wedge the lane and disable /request forever.
+// queued is true when the caller had to wait for a free slot.
+func (b *Bot) takeLane(authorID, hint string, toolIters, passes int) (release func(), queued bool) {
+	coder := b.cfg.Coders[authorID]
+	dl := turnDeadline(toolIters, passes, coder)
+	if coder {
+		if !b.build.tryAcquire(hint, dl) {
+			queued = true
+			b.build.acquire(hint, dl)
+		}
+		return b.build.release, queued
+	}
+	select {
+	case b.locks <- struct{}{}:
+	default:
+		queued = true
+		b.locks <- struct{}{}
+	}
+	return func() { <-b.locks }, queued
+}
 
 // Drain stops accepting new turns and waits (bounded) for in-flight ones to
 // finish and send their replies — so a hot-deploy's killall doesn't eat a turn
@@ -391,18 +428,19 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	atomic.AddInt32(&b.pending, 1)
 	go func() {
 		defer atomic.AddInt32(&b.pending, -1)
-		// One turn at a time by default (RAM-safe on the Nano). If she's busy,
-		// queue this one — and drop an ⏳ on the message so they know they're in
-		// line rather than being ignored.
-		queued := false
-		select {
-		case b.locks <- struct{}{}:
-		default:
-			queued = true
-			_ = s.MessageReactionAdd(m.ChannelID, m.ID, "⏳")
-			b.locks <- struct{}{} // wait our turn in the queue
+		// Ordinary turns share the concurrency-limited lane (default 1,
+		// RAM-safe on the Nano). Coder/build turns take the separate build
+		// lane so a long scaffold does not freeze chat. If the chosen lane is
+		// busy, queue — and drop an ⏳ so they know they're in line.
+		iters, passes := b.cfg.MaxToolIters, b.cfg.Passes
+		if ambient {
+			iters, passes = 6, 1
 		}
-		defer func() { <-b.locks }()
+		release, queued := b.takeLane(m.Author.ID, content, iters, passes)
+		if queued {
+			_ = s.MessageReactionAdd(m.ChannelID, m.ID, "⏳")
+		}
+		defer release()
 		if queued {
 			_ = s.MessageReactionRemove(m.ChannelID, m.ID, "⏳", s.State.User.ID)
 		}
@@ -427,6 +465,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 					log.Printf("mid-turn notify: %v", err)
 				}
 			},
+			SetBuildName: b.build.setName,
 		}, content)
 		close(stop)
 		if ambient {

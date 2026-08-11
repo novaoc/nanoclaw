@@ -35,7 +35,8 @@ type ToolCtx struct {
 	boundary  *phaseBoundary
 	exhausted bool // this lane used its full tool budget without a final answer
 	repoReads int  // focused GitHub inspection calls; bounded to prevent analysis loops
-	appSpec   *AppSpec // structured build specification for the current turn/job
+	ghCache   *ghRepoCache // turn-scoped GitHub tree/blob cache for remote search
+	appSpec   *AppSpec     // structured build specification for the current turn/job
 }
 
 // phaseBoundary is an attempted web↔code transition. The tool stays blocked,
@@ -145,16 +146,18 @@ func toolDefs(cfg *Config) []ToolDef {
 				"create_rails_app {name, description?} — creates a Ruby on Rails app from Vela's configured production framework AFTER app_spec is set. The new repo starts PRIVATE and holds the framework's placeholder identity; "+
 				"publish_app {repo} — makes a finished app public and forkable. Only after it carries the requested product's own identity and has passed verify_repo. Refused when the operator has publication turned off, which is normal; say so plainly rather than retrying; "+
 				"create_repo {name, description?} — legacy/non-app repository action; refused when the Rails framework is configured; "+
-				"list_tree {repo, ref?, path?} — inspect Vela's own repository in one call; optional path filters by prefix; "+
-				"read_files {repo, paths:[up to 3 paths], ref?} — read focused files from Vela's own repository; use this instead of shell/curl and read only files you will change; "+
-				"put_file {repo, path, content, message?, branch?} — REPLACES THE ENTIRE FILE and commits it (never send a fragment; read existing files first; repo is 'name' for Vela's own or 'owner/name'); "+
+				"search_code {repo, pattern, path?, glob?, ref?} — regex search over the remote repo (works on brand-new repos). Returns path:line: text like workspace search_code. SEARCH BEFORE read_files; narrow with path/glob; "+
+				"list_tree {repo, ref?, path?} — list paths only when you need structure, not contents; "+
+				"read_files {repo, paths:[up to 3 paths], ref?} — read only files you will edit; never re-read to hunt for symbols (use search_code); "+
+				"patch_file {repo, path, ops, message?, branch?} — targeted edits (same ops as apply_patch: replace|insert_after|insert_before|delete; each find must match exactly once or nothing is committed). Prefer for small edits; "+
+				"put_file {repo, path, content, message?, branch?} — REPLACES THE ENTIRE FILE and commits (new files or full rewrites only; repo is 'name' or 'owner/name'); "+
 				"delete_file {repo, path, message?, branch?} — deletes one file from a Vela-owned repository without shell/curl; "+
 				"open_pr {repo:'owner/name', title, head, base?, body?} — head is 'branch' (same repo) or 'forkowner:branch' (from a fork); "+
 				"fork {repo:'owner/name'}; "+
 				"enable_pages {repo} — legacy static publishing, never completion for an app request. "+
-				"TO DEPLOY AN APP: app_spec → create_rails_app → focused put_file changes → verify_repo → deploy_repo. Never substitute standalone HTML, Node, Python, Go, or PHP. "+
-				"To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
-			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|publish_app|list_tree|read_files|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
+				"TO DEPLOY AN APP: app_spec → create_rails_app → search_code → patch_file (put_file only for new/full files) → verify_repo → deploy_repo. Never substitute standalone HTML, Node, Python, Go, or PHP. "+
+				"To PR into someone else's repo: fork it, patch_file/put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
+			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|publish_app|search_code|list_tree|read_files|patch_file|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"pattern":{"type":"string"},"glob":{"type":"string"},"ops":{"type":"array","items":{"type":"object","properties":{"op":{"type":"string"},"find":{"type":"string"},"replace":{"type":"string"},"text":{"type":"string"}},"required":["op","find"]}},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
 	if cfg.SandboxURL != "" && cfg.SandboxToken != "" && cfg.SandboxSecret != "" { // Holodex demo hosting
 		defs = append(defs, mk("deploy_demo",

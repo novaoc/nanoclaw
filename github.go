@@ -22,9 +22,13 @@ import (
 // separately), so it can be offered to the whole server. All actions use
 // Vela's own token and act as her account; every call is audit-logged.
 
-const ghAPI = "https://api.github.com"
+const defaultGHAPI = "https://api.github.com"
 
 const maxRepoArchive = 96 << 20
+
+// maxRemoteSearchBlobs caps how many blobs one search_code call will fetch
+// after path/glob filtering, so a whole-repo scan cannot hammer the API.
+const maxRemoteSearchBlobs = 400
 
 var repoPartRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
@@ -70,7 +74,7 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 			return "the private Vela Rails foundation isn't configured on this instance"
 		}
 		tc.usedCode = true
-		return gh.createFromTemplate(tc.cfg.RailsTemplate, a.Name, a.Description)
+		return gh.createFromTemplate(tc.cfg.RailsTemplate, a.Name, a.Description, tc.cfg.PublicApps)
 	case "publish_app":
 		if a.Repo == "" {
 			return "github error: publish_app needs repo"
@@ -80,6 +84,21 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		}
 		tc.usedCode = true
 		return gh.publishApp(a.Repo, tc.cfg.PublicApps)
+	case "search_code":
+		if a.Repo == "" || strings.TrimSpace(a.Pattern) == "" {
+			return "github error: search_code needs repo and pattern"
+		}
+		if err := gh.requireOwnedRepo(a.Repo); err != nil {
+			return "github error: " + err.Error()
+		}
+		if tc.repoReads >= 12 {
+			return "INSPECTION_COMPLETE: repository read limit reached. You already have enough context; stop inspecting and make the focused patch_file/put_file changes now."
+		}
+		tc.repoReads++
+		tc.usedCode = true
+		tc.ensureGHCache()
+		gh.cache = tc.ghCache
+		return gh.searchCode(a.Repo, a.Pattern, a.Path, a.Glob, a.Ref)
 	case "list_tree":
 		if a.Repo == "" {
 			return "github error: list_tree needs repo"
@@ -88,7 +107,7 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 			return "github error: " + err.Error()
 		}
 		if tc.repoReads >= 12 {
-			return "INSPECTION_COMPLETE: repository read limit reached. You already have enough context; stop inspecting and make the focused put_file changes now."
+			return "INSPECTION_COMPLETE: repository read limit reached. You already have enough context; stop inspecting and make the focused patch_file/put_file changes now."
 		}
 		tc.repoReads++
 		tc.usedCode = true
@@ -101,16 +120,29 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 			return "github error: " + err.Error()
 		}
 		if tc.repoReads >= 12 {
-			return "INSPECTION_COMPLETE: repository read limit reached. You already have enough context; stop inspecting and make the focused put_file changes now."
+			return "INSPECTION_COMPLETE: repository read limit reached. You already have enough context; stop inspecting and make the focused patch_file/put_file changes now."
 		}
 		tc.repoReads++
 		tc.usedCode = true
 		return gh.readFiles(a.Repo, a.Ref, a.Paths)
+	case "patch_file":
+		if a.Repo == "" || a.Path == "" {
+			return "github error: patch_file needs repo and path"
+		}
+		if len(a.Ops) == 0 {
+			return "github error: patch_file needs a non-empty ops array"
+		}
+		tc.usedCode = true
+		tc.ensureGHCache()
+		gh.cache = tc.ghCache
+		return gh.patchFile(a.Repo, a.Path, a.Ops, a.Message, a.Branch)
 	case "put_file":
 		if a.Repo == "" || a.Path == "" {
 			return "github error: put_file needs repo and path"
 		}
 		tc.usedCode = true
+		tc.ensureGHCache()
+		gh.cache = tc.ghCache
 		return gh.putFile(a.Repo, a.Path, a.Content, a.Message, a.Branch)
 	case "delete_file":
 		if a.Repo == "" || a.Path == "" {
@@ -120,6 +152,8 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 			return "github error: " + err.Error()
 		}
 		tc.usedCode = true
+		tc.ensureGHCache()
+		gh.cache = tc.ghCache
 		return gh.deleteFile(a.Repo, a.Path, a.Message, a.Branch)
 	case "open_pr":
 		if a.Repo == "" || a.Title == "" || a.Head == "" {
@@ -140,12 +174,56 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		tc.usedCode = true
 		return gh.enablePages(a.Repo)
 	}
-	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|publish_app|list_tree|read_files|put_file|delete_file|open_pr|fork|enable_pages)"
+	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|publish_app|search_code|list_tree|read_files|patch_file|put_file|delete_file|open_pr|fork|enable_pages)"
+}
+
+// ghRepoCache holds git trees and blobs for the current tool turn so remote
+// search_code does not re-fetch the same tree/blob on every call. Lifetime is
+// the ToolCtx (one agent turn / code-budget continuation). Writes invalidate
+// the affected owner/name entries.
+type ghRepoCache struct {
+	trees map[string][]ghTreeBlob // "owner/name@ref" → blob entries
+	blobs map[string][]byte       // blob sha → content
+}
+
+type ghTreeBlob struct {
+	Path string
+	SHA  string
+	Size int64
+}
+
+func (tc *ToolCtx) ensureGHCache() {
+	if tc.ghCache == nil {
+		tc.ghCache = &ghRepoCache{
+			trees: map[string][]ghTreeBlob{},
+			blobs: map[string][]byte{},
+		}
+	}
+}
+
+func (c *ghRepoCache) invalidateRepo(owner, name string) {
+	if c == nil {
+		return
+	}
+	prefix := owner + "/" + name + "@"
+	for k := range c.trees {
+		if strings.HasPrefix(k, prefix) {
+			delete(c.trees, k)
+		}
+	}
+	// Blobs are content-addressed; stale SHAs simply go unused. Clear them if
+	// the map grows large so a long build cannot retain unbounded memory.
+	if len(c.blobs) > 512 {
+		c.blobs = map[string][]byte{}
+	}
 }
 
 type ghClient struct {
-	token string
-	owner string // cached authenticated login (Velaoc)
+	token  string
+	owner  string // cached authenticated login (Velaoc)
+	api    string // empty → defaultGHAPI (tests point at httptest)
+	client *http.Client // nil → ssrfClient
+	cache  *ghRepoCache
 }
 
 func newGH(cfg *Config) *ghClient {
@@ -153,6 +231,20 @@ func newGH(cfg *Config) *ghClient {
 		return nil
 	}
 	return &ghClient{token: cfg.GitHubToken}
+}
+
+func (g *ghClient) apiBase() string {
+	if g.api != "" {
+		return g.api
+	}
+	return defaultGHAPI
+}
+
+func (g *ghClient) http() *http.Client {
+	if g.client != nil {
+		return g.client
+	}
+	return ssrfClient
 }
 
 // do issues an API call and returns the decoded JSON, the status, and any
@@ -166,7 +258,7 @@ func (g *ghClient) do(method, path string, body any) (map[string]any, int, error
 		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, ghAPI+path, rdr)
+	req, err := http.NewRequest(method, g.apiBase()+path, rdr)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -177,7 +269,7 @@ func (g *ghClient) do(method, path string, body any) (map[string]any, int, error
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := ssrfClient.Do(req)
+	resp, err := g.http().Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -344,6 +436,209 @@ func (g *ghClient) readFiles(repo, ref string, paths []string) string {
 	return strings.TrimSpace(out.String())
 }
 
+// searchCode regex-searches a remote repo by walking the git tree and fetching
+// blobs (not GitHub code-search — that lags on brand-new repos). Matching and
+// output formatting reuse the local search helpers so the model sees one shape.
+func (g *ghClient) searchCode(repo, pattern, pathPrefix, glob, ref string) string {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return "search error: pattern is required"
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "search error: bad pattern: " + err.Error()
+	}
+	owner, name, err := g.resolveRepo(repo)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	ref, err = g.defaultRef(owner, name, ref)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	entries, err := g.cachedTree(owner, name, ref)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+
+	var b strings.Builder
+	matches := 0
+	truncated := false
+	blobsFetched := 0
+	for _, e := range entries {
+		if truncated {
+			break
+		}
+		if searchSkipRemotePath(e.Path) {
+			continue
+		}
+		if !searchPathPrefixOK(e.Path, pathPrefix) {
+			continue
+		}
+		if !searchGlobOK(e.Path, glob) {
+			continue
+		}
+		if e.Size > maxSearchFileBytes {
+			continue
+		}
+		if blobsFetched >= maxRemoteSearchBlobs {
+			truncated = true
+			break
+		}
+		raw, err := g.cachedBlob(owner, name, e.SHA)
+		if err != nil {
+			continue // skip unreadable blobs; keep searching
+		}
+		blobsFetched++
+		n, hitTrunc := appendContentSearchHits(&b, e.Path, raw, re, maxSearchResults-matches)
+		matches += n
+		if hitTrunc || matches >= maxSearchResults {
+			truncated = true
+		}
+	}
+	return finishSearchOutput(&b, matches, truncated)
+}
+
+func (g *ghClient) cachedTree(owner, name, ref string) ([]ghTreeBlob, error) {
+	key := owner + "/" + name + "@" + ref
+	if g.cache != nil {
+		if entries, ok := g.cache.trees[key]; ok {
+			return entries, nil
+		}
+	}
+	m, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s/git/trees/%s?recursive=1", owner, name, url.PathEscape(ref)), nil)
+	if err != nil {
+		return nil, err
+	}
+	if st >= 400 {
+		return nil, errors.New(ghErr(m, st))
+	}
+	var entries []ghTreeBlob
+	if tree, ok := m["tree"].([]any); ok {
+		for _, raw := range tree {
+			entry, _ := raw.(map[string]any)
+			typ, _ := entry["type"].(string)
+			if typ != "blob" {
+				continue
+			}
+			path, _ := entry["path"].(string)
+			sha, _ := entry["sha"].(string)
+			if path == "" || sha == "" {
+				continue
+			}
+			var size int64
+			switch v := entry["size"].(type) {
+			case float64:
+				size = int64(v)
+			case json.Number:
+				size, _ = v.Int64()
+			}
+			entries = append(entries, ghTreeBlob{Path: path, SHA: sha, Size: size})
+		}
+	}
+	if g.cache != nil {
+		g.cache.trees[key] = entries
+	}
+	return entries, nil
+}
+
+func (g *ghClient) cachedBlob(owner, name, sha string) ([]byte, error) {
+	if g.cache != nil {
+		if raw, ok := g.cache.blobs[sha]; ok {
+			return raw, nil
+		}
+	}
+	m, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s/git/blobs/%s", owner, name, url.PathEscape(sha)), nil)
+	if err != nil {
+		return nil, err
+	}
+	if st >= 400 {
+		return nil, errors.New(ghErr(m, st))
+	}
+	encoded, _ := m["content"].(string)
+	if encoded == "" {
+		return nil, fmt.Errorf("empty blob")
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(encoded, "\n", ""))
+	if err != nil {
+		return nil, err
+	}
+	if g.cache != nil {
+		g.cache.blobs[sha] = raw
+	}
+	return raw, nil
+}
+
+// patchFile reads one remote file, applies applyOps (all-or-nothing), and
+// commits only when every op succeeds. Returns the compact +/− summary.
+func (g *ghClient) patchFile(repo, path string, ops []patchOp, message, branch string) string {
+	owner, err := g.login()
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	name := repo
+	if strings.Contains(repo, "/") {
+		parts := strings.SplitN(repo, "/", 2)
+		owner, name = parts[0], parts[1]
+	}
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	if path == "" || len(path) > 250 || strings.HasPrefix(path, "/") ||
+		filepath.ToSlash(filepath.Clean(path)) != path || strings.ContainsRune(path, 0) {
+		return "github error: invalid path"
+	}
+	if err := g.ensureBranch(owner, name, branch); err != nil {
+		return "couldn't prepare branch: " + err.Error()
+	}
+	q := ""
+	if branch != "" {
+		q = "?ref=" + url.QueryEscape(branch)
+	}
+	cur, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s/contents/%s%s", owner, name, ghEsc(path), q), nil)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	if st >= 400 {
+		return "patch error: " + ghErr(cur, st)
+	}
+	sha, _ := cur["sha"].(string)
+	encoded, _ := cur["content"].(string)
+	raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(encoded, "\n", ""))
+	if err != nil {
+		return "patch error: couldn't decode file"
+	}
+	old := string(raw)
+	next, err := applyOps(old, ops)
+	if err != nil {
+		return "patch error: " + err.Error()
+	}
+	if next == old {
+		return fmt.Sprintf("patched %s: %d ops (+0 -0 lines) — content unchanged", path, len(ops))
+	}
+	if message == "" {
+		message = "patch " + path
+	}
+	payload := map[string]any{
+		"message": message,
+		"content": base64.StdEncoding.EncodeToString([]byte(next)),
+		"sha":     sha,
+	}
+	if branch != "" {
+		payload["branch"] = branch
+	}
+	m, st, err := g.do("PUT", fmt.Sprintf("/repos/%s/%s/contents/%s", owner, name, ghEsc(path)), payload)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	if st >= 400 {
+		return "couldn't patch file — " + ghErr(m, st)
+	}
+	if g.cache != nil {
+		g.cache.invalidateRepo(owner, name)
+	}
+	add, del := lineDiffCounts(old, next)
+	return fmt.Sprintf("patched %s: %d ops (+%d -%d lines)", path, len(ops), add, del)
+}
+
 // downloadArchive resolves ref to an immutable commit SHA, then downloads the
 // repository tarball to a 0600 temporary file. The GitHub token stays in the
 // request header and never enters a URL, command line, tool result, or log.
@@ -377,7 +672,7 @@ func (g *ghClient) downloadArchive(repo, ref, tempDir string) (string, string, e
 		return "", "", fmt.Errorf("GitHub did not resolve %s to a commit", ref)
 	}
 
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/repos/%s/%s/tarball/%s", ghAPI, owner, name, sha), nil)
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/repos/%s/%s/tarball/%s", g.apiBase(), owner, name, sha), nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -385,7 +680,7 @@ func (g *ghClient) downloadArchive(repo, ref, tempDir string) (string, string, e
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "vela")
-	client := *ssrfClient
+	client := *g.http()
 	client.Timeout = 2 * time.Minute
 	resp, err := client.Do(req)
 	if err != nil {
@@ -447,18 +742,20 @@ func (g *ghClient) createRepo(name, desc string) string {
 	return fmt.Sprintf("created repo %s", url)
 }
 
-// createFromTemplate creates a repository from Vela's private Rails
-// foundation. The configured template name stays out of the model prompt and
-// result; callers only need to choose the new application's name.
+// createFromTemplate creates a repository from Vela's Rails foundation. The
+// configured template name stays out of the model prompt and result; callers
+// only need to choose the new application's name.
 //
-// Generated applications are PRIVATE at creation, always. GitHub's generate
-// endpoint copies the template's contents verbatim, so a repository made
-// public at this moment would expose the foundation tree before the app has
-// been given its own identity — and, while the foundation itself is not yet
-// cleared for release, would publish foundation code outright. Publication is
-// a separate, deliberate step: publish_app, which refuses unless the operator
-// has enabled it with VELA_PUBLIC_APPS=1.
-func (g *ghClient) createFromTemplate(template, name, desc string) string {
+// Visibility follows the operator's setting. Applications are created public
+// when publication is enabled (VELA_PUBLIC_APPS=1) and private otherwise.
+//
+// The private default existed because the foundation was a derivative of
+// commercially licensed code: a public repository generated from it would have
+// distributed that code from its first instant. The foundation is now an
+// original MIT rewrite that is itself public, so that reason is gone — but the
+// gate is kept rather than deleted, because an instance pointed at a private
+// or derivative template must still start private.
+func (g *ghClient) createFromTemplate(template, name, desc string, public bool) string {
 	owner, repo, err := g.resolveRepo(template)
 	if err != nil {
 		return "couldn't resolve the Rails foundation — " + err.Error()
@@ -469,7 +766,7 @@ func (g *ghClient) createFromTemplate(template, name, desc string) string {
 	}
 	m, st, err := g.do("POST", fmt.Sprintf("/repos/%s/%s/generate", owner, repo), map[string]any{
 		"owner": destinationOwner, "name": name, "description": desc,
-		"private": true, "include_all_branches": false,
+		"private": !public, "include_all_branches": false,
 	})
 	if err != nil {
 		return "github error: " + err.Error()
@@ -478,7 +775,10 @@ func (g *ghClient) createFromTemplate(template, name, desc string) string {
 		return "couldn't create Rails app — " + ghErr(m, st)
 	}
 	u, _ := m["html_url"].(string)
-	return fmt.Sprintf("created Rails app %s from Vela's production foundation (private for now). Give it its own identity, verify it, then use publish_app to make it public and forkable.", u)
+	if public {
+		return fmt.Sprintf("created Rails app %s from Vela's production foundation — public and forkable. Give it its own identity and verify it.", u)
+	}
+	return fmt.Sprintf("created Rails app %s from Vela's production foundation (private on this instance). Give it its own identity, verify it, then use publish_app to make it public and forkable.", u)
 }
 
 // publishApp makes a generated application public once it carries its own
@@ -601,6 +901,9 @@ func (g *ghClient) putFile(repo, path, content, message, branch string) string {
 	if st >= 400 {
 		return "couldn't write file — " + ghErr(m, st)
 	}
+	if g.cache != nil {
+		g.cache.invalidateRepo(owner, repo)
+	}
 	url := ""
 	if c, ok := m["content"].(map[string]any); ok {
 		url, _ = c["html_url"].(string)
@@ -649,6 +952,9 @@ func (g *ghClient) deleteFile(repo, path, message, branch string) string {
 	}
 	if st >= 400 {
 		return "couldn't delete file — " + ghErr(result, st)
+	}
+	if g.cache != nil {
+		g.cache.invalidateRepo(owner, name)
 	}
 	return fmt.Sprintf("deleted %s from %s/%s", path, owner, name)
 }

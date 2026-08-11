@@ -744,10 +744,12 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 			messages = append(messages, Msg{Role: "user", Content: "[AUTOMATIC CONTINUATION — CODE TOOL BUDGET] Continue the same approved build now without asking the user. Do not repeat repository inspection or completed writes. Make the remaining focused changes, verify, deploy, and stop only when the requested repository and demo are complete."})
 			artifacts := tc.Artifacts
 			repoReads := tc.repoReads
+			ghCache := tc.ghCache
+			appSpec := tc.appSpec
 			tc = &ToolCtx{
 				cfg: a.cfg, authorID: authorID, author: author, request: originalRequest,
 				guildID: t.GuildID, channelID: channelID, disc: a.disc, Artifacts: artifacts,
-				usedCode: true, repoReads: repoReads,
+				usedCode: true, repoReads: repoReads, ghCache: ghCache, appSpec: appSpec,
 			}
 			final, messages, ok = a.toolLoop(ctx, messages, tc, toolIters, toolDefs(a.cfg))
 			continue

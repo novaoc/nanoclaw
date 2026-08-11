@@ -309,13 +309,8 @@ func (tc *ToolCtx) searchCode(pattern, pathFilter, glob string) string {
 			return nil
 		}
 		relSlash := filepath.ToSlash(rel)
-		if glob != "" {
-			base := filepath.Base(relSlash)
-			okPath, _ := filepath.Match(glob, relSlash)
-			okBase, _ := filepath.Match(glob, base)
-			if !okPath && !okBase {
-				return nil
-			}
+		if !searchGlobOK(relSlash, glob) {
+			return nil
 		}
 		n, hitTrunc := appendSearchHits(&b, relSlash, p, re, maxSearchResults-matches)
 		matches += n
@@ -328,34 +323,59 @@ func (tc *ToolCtx) searchCode(pattern, pathFilter, glob string) string {
 	if err != nil {
 		return "search error: " + err.Error()
 	}
+	return finishSearchOutput(&b, matches, truncated)
+}
+
+func searchOneFile(rel, full string, re *regexp.Regexp, glob string) string {
+	relSlash := filepath.ToSlash(rel)
+	if !searchGlobOK(relSlash, glob) {
+		return "no matches"
+	}
+	var b strings.Builder
+	n, trunc := appendSearchHits(&b, relSlash, full, re, maxSearchResults)
+	return finishSearchOutput(&b, n, trunc)
+}
+
+// searchGlobOK reports whether relSlash matches an optional filepath.Match glob
+// against the full relative path or the basename (same rules as local search).
+func searchGlobOK(relSlash, glob string) bool {
+	if glob == "" {
+		return true
+	}
+	base := filepath.Base(relSlash)
+	okPath, _ := filepath.Match(glob, relSlash)
+	okBase, _ := filepath.Match(glob, base)
+	return okPath || okBase
+}
+
+// searchPathPrefixOK reports whether slash-path is under optional prefix
+// (exact file or directory prefix). Empty prefix matches everything.
+func searchPathPrefixOK(path, prefix string) bool {
+	prefix = strings.Trim(filepath.ToSlash(strings.TrimSpace(prefix)), "/")
+	if prefix == "" {
+		return true
+	}
+	path = strings.Trim(filepath.ToSlash(path), "/")
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
+}
+
+// searchSkipRemotePath is true when any path component is a noise directory.
+func searchSkipRemotePath(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if searchSkipDirs[part] {
+			return true
+		}
+	}
+	return false
+}
+
+func finishSearchOutput(b *strings.Builder, matches int, truncated bool) string {
 	if matches == 0 {
 		return "no matches"
 	}
 	out := strings.TrimRight(b.String(), "\n")
 	if truncated {
 		out += fmt.Sprintf("\n[%d results shown, truncated — narrow pattern or path]", matches)
-	}
-	return out
-}
-
-func searchOneFile(rel, full string, re *regexp.Regexp, glob string) string {
-	relSlash := filepath.ToSlash(rel)
-	if glob != "" {
-		base := filepath.Base(relSlash)
-		okPath, _ := filepath.Match(glob, relSlash)
-		okBase, _ := filepath.Match(glob, base)
-		if !okPath && !okBase {
-			return "no matches"
-		}
-	}
-	var b strings.Builder
-	n, trunc := appendSearchHits(&b, relSlash, full, re, maxSearchResults)
-	if n == 0 {
-		return "no matches"
-	}
-	out := strings.TrimRight(b.String(), "\n")
-	if trunc {
-		out += fmt.Sprintf("\n[%d results shown, truncated — narrow pattern or path]", n)
 	}
 	return out
 }
@@ -369,10 +389,21 @@ func appendSearchHits(b *strings.Builder, relSlash, full string, re *regexp.Rege
 		return 0, false
 	}
 	raw, err := os.ReadFile(full)
-	if err != nil || isBinaryContent(raw) {
+	if err != nil {
 		return 0, false
 	}
-	// Line-scan without holding Split's full slice longer than needed.
+	return appendContentSearchHits(b, relSlash, raw, re, budget)
+}
+
+// appendContentSearchHits scans raw file bytes for re and appends path:line hits.
+// Shared by local workspace search and remote github search_code.
+func appendContentSearchHits(b *strings.Builder, relSlash string, raw []byte, re *regexp.Regexp, budget int) (int, bool) {
+	if budget <= 0 {
+		return 0, true
+	}
+	if len(raw) > maxSearchFileBytes || isBinaryContent(raw) {
+		return 0, false
+	}
 	matches := 0
 	data := raw
 	lineNo := 1
@@ -385,7 +416,6 @@ func appendSearchHits(b *strings.Builder, relSlash, full string, re *regexp.Rege
 			line = data
 			data = nil
 		}
-		// Skip lines that aren't valid-enough text for display.
 		if re.Match(line) {
 			text := string(line)
 			if !utf8.ValidString(text) {

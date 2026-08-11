@@ -161,8 +161,15 @@ func toolDefs(cfg *Config) []ToolDef {
 				"Run a shell command in your code workspace (persists across turns). Use for git, libraries, builds, tests, and scaffolding. 180s timeout. You run on a memory-limited single-core RISC-V board; keep local work light and use verify_repo for heavy repository builds. NOTE: code and web fetches run in isolated phases (injection guard); Vela checkpoints and changes phases automatically, so never ask the user to say continue just to switch.",
 				`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`),
 			mk("write_file",
-				"Write a file in your workspace (creates dirs). Prefer this over shell heredocs for writing code.",
+				"Write a whole file in your workspace (creates dirs). Prefer apply_patch for small edits. Result includes +added/-removed line counts.",
 				`{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}`),
+			mk("apply_patch",
+				"Apply targeted edits to an existing workspace file without rewriting it. ops is an ordered list; each op's find text must match EXACTLY once in the file at that step or the whole call fails and nothing is written. "+
+					"op=replace needs find+replace; op=insert_after|insert_before needs find+text; op=delete needs find. Prefer this over write_file for surgical changes.",
+				`{"type":"object","properties":{"path":{"type":"string"},"ops":{"type":"array","items":{"type":"object","properties":{"op":{"type":"string","description":"replace|insert_after|insert_before|delete"},"find":{"type":"string"},"replace":{"type":"string"},"text":{"type":"string"}},"required":["op","find"]}}},"required":["path","ops"]}`),
+			mk("search_code",
+				"Search workspace file contents by regex pattern. Optional path confines to a subdirectory/file; optional glob filters by filepath (e.g. *.rb). Skips .git, node_modules, vendor, tmp, log, and binaries. Returns path:line: text, capped with an explicit truncation note.",
+				`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string","description":"optional subdirectory or file"},"glob":{"type":"string","description":"optional filepath.Match filter e.g. *.rb"}},"required":["pattern"]}`),
 			mk("read_file",
 				"Read a file from your workspace.",
 				`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`))
@@ -213,6 +220,7 @@ type toolArgs struct {
 	Kind, Number, Symbol, Source                                        string
 	User, Reason, Channel, Thread, Duration                             string // moderation + forum
 	Prompt                                                              string // xAI image/video gen
+	Pattern, Glob                                                       string // search_code
 	// snake_case keys need explicit tags — Go's JSON matching ignores case but
 	// NOT underscores, so without this "image_url" silently unmarshals to "".
 	ImageURL   string `json:"image_url"`
@@ -223,6 +231,7 @@ type toolArgs struct {
 	Models     []benchModel
 	Files      []demoFile // deploy_demo: the app's files
 	Paths      []string   // github read_files: focused repository files
+	Ops        []patchOp  // apply_patch
 	Port       int        // deploy_demo: container app's listen port (optional)
 }
 
@@ -269,7 +278,7 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// arbitrary outbound GET — after a code turn (which can read env/tokens) it
 	// would otherwise be an exfiltration channel via the URL.
 	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart" || name == "attach_image" || name == "model_releases" || name == "generate_image" || name == "generate_video"
-	code := name == "shell" || name == "write_file" || name == "read_file" || name == "github" || name == "deploy_demo" || name == "verify_repo" || name == "deploy_repo"
+	code := name == "shell" || name == "write_file" || name == "apply_patch" || name == "search_code" || name == "read_file" || name == "github" || name == "deploy_demo" || name == "verify_repo" || name == "deploy_repo"
 	if web && tc.usedCode {
 		tc.boundary = &phaseBoundary{Lane: "web", Tool: name}
 		return "PHASE_BOUNDARY: web fetch deferred to a fresh isolated read-only phase."
@@ -336,6 +345,10 @@ func (tc *ToolCtx) Run(name, args string) string {
 		return tc.runShell(a.Command)
 	case "write_file":
 		return tc.writeWorkspaceFile(a.Path, a.Content)
+	case "apply_patch":
+		return tc.applyPatch(a.Path, a.Ops)
+	case "search_code":
+		return tc.searchCode(a.Pattern, a.Path, a.Glob)
 	case "read_file":
 		return tc.readWorkspaceFile(a.Path)
 	}

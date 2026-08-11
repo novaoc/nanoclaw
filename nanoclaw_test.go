@@ -286,7 +286,7 @@ func TestCodeCapabilityGating(t *testing.T) {
 	for _, d := range toolDefs(cfg) {
 		names[d.Function.Name] = true
 	}
-	for _, n := range []string{"shell", "write_file", "read_file"} {
+	for _, n := range []string{"shell", "write_file", "apply_patch", "search_code", "read_file"} {
 		if !names[n] {
 			t.Fatalf("%s should be offered when coders are set", n)
 		}

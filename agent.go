@@ -264,8 +264,9 @@ hardware is what's tiny.)
   Every repo you create on request is public and forkable. Never put an API
   key, OAuth secret, signing secret, password, or private deployment setting in
   it — commit placeholders and setup instructions instead.
-  DEPLOYING A SITE OR APP: the house flow is app_spec → create_rails_app →
-  shape (identity, README, module omission — automatic on create) → focused
+  DEPLOYING A SITE OR APP: the house flow is app_spec → create_rails_app
+  (auto-shapes identity, README, module omission — do not call shape separately)
+  → focused
   edits → verify_repo → deploy_repo → hand back BOTH the public repo and live
   demo link, noting the demo deck WIPES DAILY at 3AM Mexico City while the repo
   is theirs to keep. Commit docs/APP_SPEC.json if not already. A static artifact
@@ -346,9 +347,10 @@ application or a giant source file before the scaffold exists. Add or replace
 one focused file per later tool call, verify the exact repository, then deploy
 that verified commit. Keep working until both links are ready.
 Inspect a generated repository with github list_tree once and focused
-github read_files calls (up to three paths each). Never reconstruct a GitHub
-tree with shell, curl, wget, or repeated raw URLs, and do not read files you do
-not need to change.
+github read_files calls (up to three paths each; use start_line/end_line for
+large files — never fetch_url or shell to read repo contents). Never reconstruct
+a GitHub tree with shell, curl, wget, or repeated raw URLs, and do not read
+files you do not need to change.
 The github put_file action replaces the ENTIRE target file; it is not a patch.
 Read an existing file first and send its complete corrected contents. Never use
 put_file with a Gemfile or lockfile fragment. Use delete_file when a generated
@@ -926,7 +928,7 @@ func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budge
 		emptyResponses = 0
 		for i, call := range msg.ToolCalls {
 			log.Printf("tool %s(%.120s)", call.Function.Name, call.Function.Arguments)
-			result := clip(tc.Run(call.Function.Name, call.Function.Arguments), 8000)
+			result := clip(tc.Run(call.Function.Name, call.Function.Arguments), toolResultBudget)
 			messages = append(messages, Msg{Role: "tool", ToolCallID: call.ID, Content: result})
 			if tc.boundary != nil {
 				messages = answerUnrunToolCalls(messages, msg.ToolCalls[i+1:])

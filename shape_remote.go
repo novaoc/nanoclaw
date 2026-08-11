@@ -14,20 +14,11 @@ import (
 // commit (contents API would be one commit per file).
 
 // shapeGeneratedApp stamps identity, rewrites the app README, and omits
-// foundation modules the app_spec did not select. Requires FoundationRoot for
-// module manifests. Returns a human-readable summary or an error string.
+// foundation modules the app_spec did not select. Identity always runs even
+// when app_spec is nil or module omission cannot be done safely — placeholders
+// like application_name "Application" / domain "example.com" must never ship.
+// Returns a human-readable summary or an error string.
 func (g *ghClient) shapeGeneratedApp(repo string, spec *AppSpec, cfg *Config) string {
-	if spec == nil {
-		return "shape skipped: no app_spec set"
-	}
-	if strings.TrimSpace(cfg.FoundationRoot) == "" {
-		return "shape error: VELA_FOUNDATION_ROOT is required to omit modules and stamp identity from manifests"
-	}
-	declared, err := loadFullModuleManifests(cfg.FoundationRoot)
-	if err != nil {
-		return "shape error: " + err.Error()
-	}
-
 	owner, name, err := g.resolveRepo(repo)
 	if err != nil {
 		return "shape error: " + err.Error()
@@ -43,6 +34,21 @@ func (g *ghClient) shapeGeneratedApp(repo string, spec *AppSpec, cfg *Config) st
 		return "shape error: " + err.Error()
 	}
 
+	id := identityFromSpec(spec, name, cfg.SandboxURL)
+
+	var declared map[string]*ModuleManifest
+	var omitSkip string
+	if strings.TrimSpace(cfg.FoundationRoot) == "" {
+		omitSkip = "VELA_FOUNDATION_ROOT is not configured"
+		declared = map[string]*ModuleManifest{}
+	} else {
+		declared, err = loadFullModuleManifests(cfg.FoundationRoot)
+		if err != nil {
+			omitSkip = err.Error()
+			declared = map[string]*ModuleManifest{}
+		}
+	}
+
 	// Build a path→content map of text files we may touch. Owned module paths
 	// and scan roots are enough; we do not need binaries.
 	files, err := g.fetchShapeFiles(owner, name, ref, declared)
@@ -50,16 +56,10 @@ func (g *ghClient) shapeGeneratedApp(repo string, spec *AppSpec, cfg *Config) st
 		return "shape error: " + err.Error()
 	}
 
-	id := identityFromSpec(spec, name, cfg.SandboxURL)
-	plan, err := planShape(files, spec, id, declared)
-	if err != nil {
-		return "shape error: " + err.Error()
-	}
+	plan, notes := buildShapePlan(files, spec, id, declared, omitSkip)
 
 	if len(plan.Writes) == 0 && len(plan.Deletes) == 0 {
-		return fmt.Sprintf("shaped %s/%s: identity=%s domain=%s; nothing to write (omitted=%s kept=%s)",
-			owner, name, id.ApplicationName, id.Domain,
-			orNoneList(plan.Omitted), orNoneList(plan.Kept))
+		return formatShapeResult(owner, name, id, plan, notes, 0, 0)
 	}
 
 	msg := fmt.Sprintf("shape: identity %s; omit %s", id.ApplicationName, strings.Join(plan.Omitted, ", "))
@@ -72,12 +72,59 @@ func (g *ghClient) shapeGeneratedApp(repo string, spec *AppSpec, cfg *Config) st
 	if g.cache != nil {
 		g.cache.invalidateRepo(owner, name)
 	}
-	return fmt.Sprintf(
-		"shaped %s/%s: stamped identity %q domain=%s support=%s; omitted modules [%s]; kept [%s]; %d files written, %d deleted",
+	return formatShapeResult(owner, name, id, plan, notes, len(plan.Writes), len(plan.Deletes))
+}
+
+// buildShapePlan prefers full identity+omit+README. On omit failure (or when
+// omission was already ruled out), falls back to identity+README only.
+func buildShapePlan(files map[string]string, spec *AppSpec, id AppIdentity, declared map[string]*ModuleManifest, omitSkip string) (*ShapePlan, []string) {
+	var notes []string
+	if omitSkip != "" {
+		notes = append(notes, "module omission skipped: "+omitSkip)
+		plan, err := planIdentityOnly(files, spec, id, declared)
+		if err != nil {
+			// Should not happen if foundation.yml is present; surface as empty plan note.
+			notes = append(notes, "identity stamp failed: "+err.Error())
+			return &ShapePlan{Writes: map[string]string{}}, notes
+		}
+		return plan, notes
+	}
+	if spec == nil {
+		notes = append(notes, "module omission skipped: no app_spec (all modules kept)")
+		plan, err := planIdentityOnly(files, spec, id, declared)
+		if err != nil {
+			notes = append(notes, "identity stamp failed: "+err.Error())
+			return &ShapePlan{Writes: map[string]string{}}, notes
+		}
+		return plan, notes
+	}
+
+	plan, err := planShape(files, spec, id, declared)
+	if err != nil {
+		notes = append(notes, "module omission skipped: "+err.Error())
+		fallback, ferr := planIdentityOnly(files, spec, id, declared)
+		if ferr != nil {
+			notes = append(notes, "identity stamp failed: "+ferr.Error())
+			return &ShapePlan{Writes: map[string]string{}}, notes
+		}
+		return fallback, notes
+	}
+	return plan, notes
+}
+
+func formatShapeResult(owner, name string, id AppIdentity, plan *ShapePlan, notes []string, nWrite, nDel int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		"shaped %s/%s: stamped identity %q domain=%s support=%s; omitted modules [%s]; kept [%s]; %d files written, %d deleted. Do not re-run shape — identity, README, and module selection are already applied.",
 		owner, name, id.ApplicationName, id.Domain, id.SupportEmail,
 		strings.Join(plan.Omitted, ", "), strings.Join(plan.Kept, ", "),
-		len(plan.Writes), len(plan.Deletes),
+		nWrite, nDel,
 	)
+	for _, n := range notes {
+		b.WriteString("\n")
+		b.WriteString(n)
+	}
+	return b.String()
 }
 
 func (g *ghClient) waitForFile(owner, name, path string, budget time.Duration) error {
@@ -273,4 +320,3 @@ func (g *ghClient) getFileContent(owner, name, path, ref string) (string, string
 	}
 	return string(raw), sha, nil
 }
-

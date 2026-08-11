@@ -73,9 +73,6 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		if tc.cfg.RailsTemplate == "" {
 			return "the private Vela Rails foundation isn't configured on this instance"
 		}
-		if tc.appSpec == nil {
-			return "github error: set app_spec before create_rails_app (build flow: app_spec → create_rails_app → shape → focused edits → verify_repo → deploy_repo)"
-		}
 		tc.usedCode = true
 		tc.ensureGHCache()
 		gh.cache = tc.ghCache
@@ -83,9 +80,23 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		if !strings.HasPrefix(out, "created Rails app") {
 			return out
 		}
-		// Post-generation shaping: identity, app README, module omission.
+		// Shaping is mechanical and must not depend on the model calling a
+		// separate step: stamp identity, write app README, omit unselected modules.
 		shapeOut := gh.shapeGeneratedApp(a.Name, tc.appSpec, tc.cfg)
 		return out + "\n" + shapeOut
+	case "shape":
+		// Optional re-shape of an existing generated app (identity/README/modules).
+		// create_rails_app already shapes; nothing depends on calling this.
+		if a.Repo == "" {
+			return "github error: shape needs repo"
+		}
+		if err := gh.requireOwnedRepo(a.Repo); err != nil {
+			return "github error: " + err.Error()
+		}
+		tc.usedCode = true
+		tc.ensureGHCache()
+		gh.cache = tc.ghCache
+		return gh.shapeGeneratedApp(a.Repo, tc.appSpec, tc.cfg)
 	case "publish_app":
 		if a.Repo == "" {
 			return "github error: publish_app needs repo"
@@ -135,7 +146,7 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		}
 		tc.repoReads++
 		tc.usedCode = true
-		return gh.readFiles(a.Repo, a.Ref, a.Paths)
+		return gh.readFiles(a.Repo, a.Ref, a.Paths, a.StartLine, a.EndLine)
 	case "patch_file":
 		if a.Repo == "" || a.Path == "" {
 			return "github error: patch_file needs repo and path"
@@ -185,7 +196,7 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		tc.usedCode = true
 		return gh.enablePages(a.Repo)
 	}
-	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|publish_app|search_code|list_tree|read_files|patch_file|put_file|delete_file|open_pr|fork|enable_pages)"
+	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|shape|publish_app|search_code|list_tree|read_files|patch_file|put_file|delete_file|open_pr|fork|enable_pages)"
 }
 
 // ghRepoCache holds git trees and blobs for the current tool turn so remote
@@ -414,7 +425,7 @@ func (g *ghClient) listTree(repo, ref, prefix string) string {
 	return fmt.Sprintf("repository tree at %s (%d files shown):\n%s", ref, len(paths), strings.Join(paths, "\n"))
 }
 
-func (g *ghClient) readFiles(repo, ref string, paths []string) string {
+func (g *ghClient) readFiles(repo, ref string, paths []string, startLine, endLine int) string {
 	owner, name, err := g.resolveRepo(repo)
 	if err != nil {
 		return "github error: " + err.Error()
@@ -422,6 +433,10 @@ func (g *ghClient) readFiles(repo, ref string, paths []string) string {
 	ref, err = g.defaultRef(owner, name, ref)
 	if err != nil {
 		return "github error: " + err.Error()
+	}
+	budget := readBudgetSingle
+	if len(paths) > 1 {
+		budget = readBudgetMulti
 	}
 	var out strings.Builder
 	for _, path := range paths {
@@ -442,7 +457,15 @@ func (g *ghClient) readFiles(repo, ref string, paths []string) string {
 			fmt.Fprintf(&out, "=== %s ===\nERROR: couldn't decode file\n", path)
 			continue
 		}
-		fmt.Fprintf(&out, "=== %s ===\n%s\n", path, clip(string(content), 2400))
+		p := path
+		sl, el := startLine, endLine
+		body := readFileWindow(string(content), sl, el, budget, func(next int) string {
+			if el > 0 {
+				return fmt.Sprintf(`read_files paths=["%s"] start_line=%d end_line=%d`, p, next, el)
+			}
+			return fmt.Sprintf(`read_files paths=["%s"] start_line=%d`, p, next)
+		})
+		fmt.Fprintf(&out, "=== %s ===\n%s\n", path, body)
 	}
 	return strings.TrimSpace(out.String())
 }

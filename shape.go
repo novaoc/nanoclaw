@@ -55,17 +55,33 @@ type ShapePlan struct {
 
 // identityFromSpec builds a deploy-safe identity from the app spec and repo name.
 // Domain is the Holodex demo host when the sandbox URL is known; never example.com.
+// When no app_spec (or empty name/purpose) is present, values are derived from the
+// repository name so placeholders never survive create_rails_app.
 func identityFromSpec(spec *AppSpec, repoName, sandboxURL string) AppIdentity {
-	name := "Application"
-	desc := "A generated Rails application."
+	name := ""
+	desc := ""
 	if spec != nil {
-		if s := strings.TrimSpace(spec.Name); s != "" {
-			name = sanitizeIdentityName(s)
-		}
-		if s := strings.TrimSpace(spec.Purpose); s != "" {
-			desc = sanitizeIdentityDescription(s)
+		name = strings.TrimSpace(spec.Name)
+		desc = strings.TrimSpace(spec.Purpose)
+	}
+	if name == "" {
+		name = humanizeRepoName(repoName)
+	}
+	name = sanitizeIdentityName(name)
+	if name == "Application" {
+		// Last resort: sanitized humanized slug (still better than the template default).
+		if alt := sanitizeIdentityName(humanizeRepoName(repoName)); alt != "" && alt != "Application" {
+			name = alt
 		}
 	}
+	if desc == "" {
+		if name != "" && name != "Application" {
+			desc = name + "."
+		} else {
+			desc = "A generated Rails application."
+		}
+	}
+	desc = sanitizeIdentityDescription(desc)
 	domain := demoDomain(repoName, sandboxURL)
 	email := "support@" + domain
 	return AppIdentity{
@@ -74,6 +90,28 @@ func identityFromSpec(spec *AppSpec, repoName, sandboxURL string) AppIdentity {
 		Domain:          domain,
 		SupportEmail:    email,
 	}
+}
+
+// humanizeRepoName turns "driftline-coffee" into "Driftline Coffee".
+func humanizeRepoName(repoName string) string {
+	s := repoSlug(repoName)
+	if s == "" || s == "app" {
+		return "App"
+	}
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.'
+	})
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(p[:1]) + p[1:]
+	}
+	out := strings.TrimSpace(strings.Join(parts, " "))
+	if out == "" {
+		return "App"
+	}
+	return out
 }
 
 func demoDomain(repoName, sandboxURL string) string {
@@ -392,12 +430,15 @@ func parseFullModuleManifest(content, sourcePath string) (*ModuleManifest, error
 // planShape builds writes/deletes for identity + README + module omission.
 // files is the current repo path→content map (only paths that exist).
 // declared is every module the foundation ships; keep is app_spec.Modules.
+// When spec is nil, all declared modules are kept (identity + README only).
 func planShape(files map[string]string, spec *AppSpec, id AppIdentity, declared map[string]*ModuleManifest) (*ShapePlan, error) {
 	if declared == nil {
 		declared = map[string]*ModuleManifest{}
 	}
 	keepSet := map[string]bool{}
-	if spec != nil {
+	// No app_spec → keep every module; selection is unknown, identity still stamps.
+	keepAll := spec == nil
+	if !keepAll {
 		for _, n := range spec.Modules {
 			n = strings.TrimSpace(n)
 			if n == "" {
@@ -413,7 +454,7 @@ func planShape(files map[string]string, spec *AppSpec, id AppIdentity, declared 
 
 	plan := &ShapePlan{Writes: map[string]string{}}
 	for name := range declared {
-		if keepSet[name] {
+		if keepAll || keepSet[name] {
 			plan.Kept = append(plan.Kept, name)
 		} else {
 			plan.Omitted = append(plan.Omitted, name)
@@ -440,22 +481,54 @@ func planShape(files map[string]string, spec *AppSpec, id AppIdentity, declared 
 		}
 	}
 
-	// Identity + app README on the post-omit tree.
+	if err := applyIdentityAndREADME(work, spec, id); err != nil {
+		return nil, err
+	}
+	diffShapePlan(plan, files, work)
+	return plan, nil
+}
+
+// planIdentityOnly stamps foundation.yml + app README without omitting modules.
+// Used when omission cannot be done safely (or there is no module selection).
+func planIdentityOnly(files map[string]string, spec *AppSpec, id AppIdentity, declared map[string]*ModuleManifest) (*ShapePlan, error) {
+	if declared == nil {
+		declared = map[string]*ModuleManifest{}
+	}
+	plan := &ShapePlan{Writes: map[string]string{}}
+	for name := range declared {
+		plan.Kept = append(plan.Kept, name)
+	}
+	sort.Strings(plan.Kept)
+
+	work := map[string]string{}
+	for k, v := range files {
+		work[k] = v
+	}
+	if err := applyIdentityAndREADME(work, spec, id); err != nil {
+		return nil, err
+	}
+	diffShapePlan(plan, files, work)
+	return plan, nil
+}
+
+func applyIdentityAndREADME(work map[string]string, spec *AppSpec, id AppIdentity) error {
 	yml, ok := work[foundationYMLPath]
 	if !ok {
-		return nil, fmt.Errorf("%s missing from generated app — cannot stamp identity", foundationYMLPath)
+		return fmt.Errorf("%s missing from generated app — cannot stamp identity", foundationYMLPath)
 	}
 	yml2, err := stampFoundationYML(yml, id)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	work[foundationYMLPath] = yml2
-
-	// Full app README (identity block embedded).
 	work[readmePath] = buildAppREADME(spec, id)
+	return nil
+}
 
-	// Diff against original.
-	orig := files
+func diffShapePlan(plan *ShapePlan, orig, work map[string]string) {
+	if plan.Writes == nil {
+		plan.Writes = map[string]string{}
+	}
 	for path, content := range work {
 		prev, existed := orig[path]
 		if !existed || prev != content {
@@ -468,7 +541,6 @@ func planShape(files map[string]string, spec *AppSpec, id AppIdentity, declared 
 		}
 	}
 	sort.Strings(plan.Deletes)
-	return plan, nil
 }
 
 func sortedManifestNames(m map[string]*ModuleManifest) []string {

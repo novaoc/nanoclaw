@@ -312,7 +312,7 @@ func TestCodeCapabilityGating(t *testing.T) {
 	if out := coder.writeWorkspaceFile("sub/hello.txt", "hi vela"); !strings.Contains(out, "wrote") {
 		t.Fatalf("coder write failed: %s", out)
 	}
-	if out := coder.readWorkspaceFile("sub/hello.txt"); out != "hi vela" {
+	if out := coder.readWorkspaceFile("sub/hello.txt", 0, 0); out != "hi vela" {
 		t.Fatalf("read mismatch: %q", out)
 	}
 	if out := coder.runShell("cat sub/hello.txt"); !strings.Contains(out, "hi vela") {
@@ -326,7 +326,7 @@ func TestCodeCapabilityGating(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cfg.Workspace, "..", "..", "etc", "evil")); err == nil {
 		t.Fatal("traversal wrote outside the workspace")
 	}
-	if out := coder.readWorkspaceFile("../../../etc/passwd"); !strings.Contains(out, "escapes") {
+	if out := coder.readWorkspaceFile("../../../etc/passwd", 0, 0); !strings.Contains(out, "escapes") {
 		t.Fatalf("path traversal on read not blocked: %s", out)
 	}
 }

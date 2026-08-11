@@ -364,7 +364,7 @@ func TestRemoteGithubActionsNoRegression(t *testing.T) {
 	if out := e.g.listTree("velaoc/demo", "main", "app"); !strings.Contains(out, "app/models/user.rb") {
 		t.Fatalf("list_tree: %s", out)
 	}
-	if out := e.g.readFiles("velaoc/demo", "main", []string{"README.md"}); !strings.Contains(out, "# hi") {
+	if out := e.g.readFiles("velaoc/demo", "main", []string{"README.md"}, 0, 0); !strings.Contains(out, "# hi") {
 		t.Fatalf("read_files: %s", out)
 	}
 	if out := e.g.putFile("velaoc/demo", "README.md", "# bye\n", "update", ""); !strings.Contains(out, "committed") {
@@ -412,6 +412,8 @@ func TestGithubToolDescriptionMentionsSearchAndPatch(t *testing.T) {
 		"SEARCH BEFORE",
 		"Prefer for small edits",
 		"REPLACES THE ENTIRE FILE",
+		"start_line",
+		"never fetch_url",
 	} {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("description missing %q", want)
@@ -419,5 +421,77 @@ func TestGithubToolDescriptionMentionsSearchAndPatch(t *testing.T) {
 	}
 	if !strings.Contains(params, "search_code") || !strings.Contains(params, "patch_file") || !strings.Contains(params, `"pattern"`) {
 		t.Fatalf("params schema incomplete: %s", params)
+	}
+	if !strings.Contains(params, "start_line") || !strings.Contains(params, "end_line") {
+		t.Fatalf("params missing line range: %s", params)
+	}
+}
+
+func TestGithubReadFilesRangedAndPerFileBudget(t *testing.T) {
+	// Large first file + two small ones: multi-file budget is per path so small
+	// files still appear in full; large file gets an honest continuation hint.
+	var large strings.Builder
+	for i := 1; i <= 300; i++ {
+		large.WriteString(strings.Repeat("R", 80))
+		large.WriteByte('\n')
+	}
+	files := map[string]string{
+		"config/routes.rb": large.String(),
+		"a.rb":             "alpha-content\n",
+		"b.rb":             "beta-content\n",
+	}
+	e := newGHTestEnv(t, func(w http.ResponseWriter, r *http.Request, e *ghTestEnv) {
+		switch {
+		case r.URL.Path == "/user":
+			writeJSON(w, 200, map[string]any{"login": "velaoc"})
+		case r.URL.Path == "/repos/velaoc/demo":
+			writeJSON(w, 200, map[string]any{"default_branch": "main"})
+		case strings.Contains(r.URL.Path, "/contents/") && r.Method == http.MethodGet:
+			path := strings.TrimPrefix(r.URL.Path, "/repos/velaoc/demo/contents/")
+			body, ok := files[path]
+			if !ok {
+				writeJSON(w, 404, map[string]any{"message": "missing " + path})
+				return
+			}
+			writeJSON(w, 200, map[string]any{
+				"sha": "s", "content": b64(body), "encoding": "base64",
+			})
+		default:
+			writeJSON(w, 404, map[string]any{"message": "unexpected " + r.Method + " " + r.URL.Path})
+		}
+	})
+
+	// Ranged read returns exactly the requested lines.
+	out := e.g.readFiles("velaoc/demo", "main", []string{"a.rb"}, 0, 0)
+	if !strings.Contains(out, "alpha-content") {
+		t.Fatalf("small whole file: %s", out)
+	}
+
+	// Build a tiny multi-line file for exact range.
+	files["range.rb"] = "L1\nL2\nL3\nL4\n"
+	out = e.g.readFiles("velaoc/demo", "main", []string{"range.rb"}, 2, 3)
+	if !strings.Contains(out, "L2\nL3") || strings.Contains(out, "L1") || strings.Contains(out, "L4") {
+		t.Fatalf("ranged github read: %s", out)
+	}
+
+	// 3-file: large first must not starve the others.
+	out = e.g.readFiles("velaoc/demo", "main", []string{"config/routes.rb", "a.rb", "b.rb"}, 0, 0)
+	if !strings.Contains(out, "alpha-content") || !strings.Contains(out, "beta-content") {
+		t.Fatalf("multi-file starved small files: %s", out)
+	}
+	if !strings.Contains(out, "[truncated:") || !strings.Contains(out, "of 300 total") {
+		t.Fatalf("large file missing honest truncation: %s", out)
+	}
+	if !strings.Contains(out, `read_files paths=["config/routes.rb"] start_line=`) {
+		t.Fatalf("missing continuation hint: %s", out)
+	}
+
+	// Out-of-range fails clearly (not empty).
+	out = e.g.readFiles("velaoc/demo", "main", []string{"a.rb"}, 99, 0)
+	if !strings.Contains(out, "past end of file") {
+		t.Fatalf("OOR: %s", out)
+	}
+	if strings.TrimSpace(strings.TrimPrefix(out, "=== a.rb ===")) == "" {
+		t.Fatalf("OOR must not be empty body: %s", out)
 	}
 }

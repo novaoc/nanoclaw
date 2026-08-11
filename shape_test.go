@@ -439,139 +439,332 @@ func TestLoadFullModuleManifests(t *testing.T) {
 	}
 }
 
-func TestCreateRailsAppRequiresAppSpec(t *testing.T) {
+// shapeStub holds GitHub API fixture state for create_rails_app + shape tests.
+type shapeStub struct {
+	repo        string
+	files       map[string]string
+	blobs       map[string]string // sha → content
+	treeEntries []any
+	postedTree  []any
+	generated   bool
+	treePosted  bool
+	commitPosted bool
+	refPatched  bool
+}
+
+func newShapeStub(repo string, files map[string]string) *shapeStub {
+	s := &shapeStub{repo: repo, files: files, blobs: map[string]string{}}
+	i := 0
+	for path, content := range files {
+		i++
+		sha := fmt.Sprintf("sha-%d", i)
+		s.blobs[sha] = content
+		s.treeEntries = append(s.treeEntries, map[string]any{
+			"path": path, "type": "blob", "sha": sha, "size": float64(len(content)),
+		})
+	}
+	return s
+}
+
+func (s *shapeStub) handle(w http.ResponseWriter, r *http.Request, _ *ghTestEnv) {
+	repoPrefix := "/repos/velaoc/" + s.repo
+	switch {
+	case r.URL.Path == "/user":
+		writeJSON(w, 200, map[string]any{"login": "velaoc"})
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/generate"):
+		s.generated = true
+		writeJSON(w, 201, map[string]any{
+			"html_url": "https://github.com/velaoc/" + s.repo,
+			"name":     s.repo,
+		})
+	case r.URL.Path == repoPrefix && r.Method == http.MethodGet:
+		writeJSON(w, 200, map[string]any{"default_branch": "main"})
+	case strings.Contains(r.URL.Path, "/contents/config/foundation.yml") && r.Method == http.MethodGet:
+		writeJSON(w, 200, map[string]any{
+			"sha":     "yml-sha",
+			"content": base64.StdEncoding.EncodeToString([]byte(s.files[foundationYMLPath])),
+		})
+	case strings.HasPrefix(r.URL.Path, repoPrefix+"/git/trees/"):
+		writeJSON(w, 200, map[string]any{"sha": "tree-sha", "tree": s.treeEntries})
+	case strings.HasPrefix(r.URL.Path, repoPrefix+"/git/blobs/"):
+		sha := filepath.Base(r.URL.Path)
+		content, ok := s.blobs[sha]
+		if !ok {
+			writeJSON(w, 404, map[string]any{"message": "nope"})
+			return
+		}
+		writeJSON(w, 200, map[string]any{
+			"sha":     sha,
+			"content": base64.StdEncoding.EncodeToString([]byte(content)),
+		})
+	case r.URL.Path == repoPrefix+"/git/ref/heads/main" && r.Method == http.MethodPatch:
+		s.refPatched = true
+		writeJSON(w, 200, map[string]any{"object": map[string]any{"sha": "new-commit"}})
+	case r.URL.Path == repoPrefix+"/git/ref/heads/main":
+		writeJSON(w, 200, map[string]any{"object": map[string]any{"sha": "commit-base"}})
+	case r.URL.Path == repoPrefix+"/git/commits/commit-base":
+		writeJSON(w, 200, map[string]any{"sha": "commit-base", "tree": map[string]any{"sha": "base-tree"}})
+	case r.URL.Path == repoPrefix+"/git/trees" && r.Method == http.MethodPost:
+		s.treePosted = true
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		s.postedTree, _ = body["tree"].([]any)
+		writeJSON(w, 201, map[string]any{"sha": "new-tree"})
+	case r.URL.Path == repoPrefix+"/git/commits" && r.Method == http.MethodPost:
+		s.commitPosted = true
+		writeJSON(w, 201, map[string]any{"sha": "new-commit"})
+	default:
+		writeJSON(w, 404, map[string]any{"message": "unhandled " + r.Method + " " + r.URL.Path})
+	}
+}
+
+func (s *shapeStub) contentOf(path string) string {
+	for _, raw := range s.postedTree {
+		entry, _ := raw.(map[string]any)
+		if p, _ := entry["path"].(string); p == path {
+			c, _ := entry["content"].(string)
+			return c
+		}
+	}
+	return ""
+}
+
+func (s *shapeStub) deleted(path string) bool {
+	for _, raw := range s.postedTree {
+		entry, _ := raw.(map[string]any)
+		if p, _ := entry["path"].(string); p == path {
+			return entry["sha"] == nil
+		}
+	}
+	return false
+}
+
+// createAndShape mirrors create_rails_app post-generate shaping on the stub client.
+func createAndShape(g *ghClient, template, name, desc string, public bool, spec *AppSpec, cfg *Config) string {
+	out := g.createFromTemplate(template, name, desc, public)
+	if !strings.HasPrefix(out, "created Rails app") {
+		return out
+	}
+	return out + "\n" + g.shapeGeneratedApp(name, spec, cfg)
+}
+
+func TestCreateRailsAppDoesNotRequireAppSpec(t *testing.T) {
+	// Dispatch must not refuse create_rails_app when app_spec is unset —
+	// shaping derives identity from the app name instead.
 	cfg := testCfg(t)
 	cfg.GitHubToken = "t"
 	cfg.RailsTemplate = "velaoc/foundation"
 	tc := &ToolCtx{cfg: cfg, authorID: "dev"}
 	out := tc.runGithub(toolArgs{Action: "create_rails_app", Name: "demo"})
-	if !strings.Contains(out, "app_spec") {
-		t.Fatalf("expected app_spec requirement, got %s", out)
+	if strings.Contains(out, "set app_spec before") {
+		t.Fatalf("create_rails_app must not require app_spec, got %s", out)
+	}
+	// Without a reachable API it fails at generate, not at the app_spec gate.
+	if strings.Contains(strings.ToLower(out), "app_spec") && strings.Contains(out, "before create") {
+		t.Fatalf("unexpected app_spec gate: %s", out)
+	}
+}
+
+func TestCreateRailsAppStampsIdentityWithAppSpec(t *testing.T) {
+	root := writeFullModuleFixture(t, fixtureModules())
+	stub := newShapeStub("driftline-coffee", fixtureRepoFiles())
+	e := newGHTestEnv(t, stub.handle)
+	e.tc.cfg.FoundationRoot = root
+	e.tc.cfg.SandboxURL = "https://demo.holode.xyz"
+	e.tc.cfg.RailsTemplate = "velaoc/foundation"
+	spec := &AppSpec{
+		Name:      "Driftline Coffee",
+		Purpose:   "Guests preorder coffee for pickup",
+		Entities:  []SpecEntity{{Name: "Order"}},
+		Workflows: []SpecWorkflow{{Name: "preorder", Description: "Guest places a pickup order"}},
+		Modules:   []string{"storefront"},
+		SeedDemo:  "Three drinks",
+	}
+	out := createAndShape(e.g, "velaoc/foundation", "driftline-coffee", "coffee app", false, spec, e.tc.cfg)
+	if !stub.generated {
+		t.Fatal("expected template generate")
+	}
+	if strings.Contains(out, "shape error") {
+		t.Fatalf("shape failed: %s", out)
+	}
+	if !strings.Contains(out, "Driftline Coffee") || !strings.Contains(out, "stamped identity") {
+		t.Fatalf("summary missing identity: %s", out)
+	}
+	if !strings.Contains(out, "Do not re-run shape") {
+		t.Fatalf("result should tell model not to redo shape: %s", out)
+	}
+	yml := stub.contentOf(foundationYMLPath)
+	if !strings.Contains(yml, `application_name: "Driftline Coffee"`) {
+		t.Fatalf("identity not stamped:\n%s", yml)
+	}
+	if strings.Contains(yml, "example.com") || strings.Contains(yml, `"Application"`) {
+		t.Fatalf("placeholders survived:\n%s", yml)
+	}
+	readme := stub.contentOf(readmePath)
+	if !strings.Contains(readme, identityStart) || !strings.Contains(readme, "Guests preorder") {
+		t.Fatalf("app README missing:\n%s", readme)
+	}
+	if strings.Contains(readme, "starter template") || strings.Contains(readme, "A production-ready Rails application.") {
+		t.Fatalf("foundation README placeholder text survived:\n%s", readme)
+	}
+	// storefront kept, crm omitted
+	if stub.deleted("app/models/foundation/storefront/product.rb") {
+		t.Fatal("selected storefront must stay")
+	}
+	if !stub.deleted("app/models/foundation/crm/contact.rb") {
+		t.Fatal("unselected crm must be omitted")
+	}
+	if !strings.Contains(out, "crm") || !strings.Contains(out, "storefront") {
+		t.Fatalf("summary should list omit/keep: %s", out)
+	}
+}
+
+func TestCreateRailsAppStampsIdentityWithoutAppSpec(t *testing.T) {
+	root := writeFullModuleFixture(t, fixtureModules())
+	stub := newShapeStub("driftline-coffee", fixtureRepoFiles())
+	e := newGHTestEnv(t, stub.handle)
+	e.tc.cfg.FoundationRoot = root
+	e.tc.cfg.SandboxURL = "https://demo.holode.xyz"
+	out := createAndShape(e.g, "velaoc/foundation", "driftline-coffee", "desc", false, nil, e.tc.cfg)
+	if strings.Contains(out, "shape error") {
+		t.Fatalf("shape failed: %s", out)
+	}
+	if !strings.Contains(out, "Driftline Coffee") {
+		t.Fatalf("identity should derive from app name: %s", out)
+	}
+	if !strings.Contains(out, "module omission skipped") {
+		t.Fatalf("should report omit skip without app_spec: %s", out)
+	}
+	yml := stub.contentOf(foundationYMLPath)
+	if !strings.Contains(yml, `application_name: "Driftline Coffee"`) {
+		t.Fatalf("identity not stamped from name:\n%s", yml)
+	}
+	if strings.Contains(yml, "example.com") {
+		t.Fatalf("example.com must not survive without app_spec:\n%s", yml)
+	}
+	if !strings.Contains(yml, "driftline-coffee.demo.holode.xyz") {
+		t.Fatalf("domain not stamped:\n%s", yml)
+	}
+	readme := stub.contentOf(readmePath)
+	if readme == "" || strings.Contains(readme, "starter template") {
+		t.Fatalf("minimal app README required:\n%s", readme)
+	}
+	// Without app_spec, modules are kept (no deletes of module paths).
+	if stub.deleted("app/models/foundation/crm/contact.rb") {
+		t.Fatal("without app_spec, modules must not be omitted")
+	}
+}
+
+func TestCreateRailsAppOmitFailureStillStampsIdentity(t *testing.T) {
+	root := writeFullModuleFixture(t, fixtureModules())
+	stub := newShapeStub("broken-app", fixtureRepoFiles())
+	e := newGHTestEnv(t, stub.handle)
+	e.tc.cfg.FoundationRoot = root
+	e.tc.cfg.SandboxURL = "https://demo.holode.xyz"
+	// Unknown module makes full planShape fail; identity must still land.
+	spec := &AppSpec{
+		Name:      "Broken App",
+		Purpose:   "Should still get a real domain",
+		Entities:  []SpecEntity{{Name: "Thing"}},
+		Workflows: []SpecWorkflow{{Name: "do"}},
+		Modules:   []string{"storefront", "ghost_module"},
+	}
+	out := createAndShape(e.g, "velaoc/foundation", "broken-app", "", false, spec, e.tc.cfg)
+	if strings.Contains(out, "shape error") && !strings.Contains(out, "stamped identity") {
+		t.Fatalf("omit failure must not abort identity: %s", out)
+	}
+	if !strings.Contains(out, "module omission skipped") {
+		t.Fatalf("must report omit skip: %s", out)
+	}
+	if !strings.Contains(out, "Broken App") {
+		t.Fatalf("identity name missing from summary: %s", out)
+	}
+	yml := stub.contentOf(foundationYMLPath)
+	if !strings.Contains(yml, `application_name: "Broken App"`) {
+		t.Fatalf("identity not stamped after omit failure:\n%s", yml)
+	}
+	if strings.Contains(yml, "example.com") {
+		t.Fatalf("example.com survived omit failure:\n%s", yml)
+	}
+	if !strings.Contains(yml, "broken-app.demo.holode.xyz") {
+		t.Fatalf("domain missing after omit failure:\n%s", yml)
+	}
+	// Modules should not have been deleted when omit was skipped.
+	if stub.deleted("app/models/foundation/crm/contact.rb") {
+		t.Fatal("failed omit must not partially delete modules")
+	}
+}
+
+func TestIdentityFromSpecDerivesNameWithoutSpec(t *testing.T) {
+	id := identityFromSpec(nil, "my-cool-shop", "https://demo.holode.xyz")
+	if id.ApplicationName != "My Cool Shop" {
+		t.Fatalf("name=%q", id.ApplicationName)
+	}
+	if id.Domain != "my-cool-shop.demo.holode.xyz" {
+		t.Fatalf("domain=%q", id.Domain)
+	}
+	if id.Domain == "example.com" || id.ApplicationName == "Application" {
+		t.Fatal("placeholders must not be used")
+	}
+}
+
+func TestPlanShapeNilSpecKeepsAllModules(t *testing.T) {
+	plan, err := planShape(fixtureRepoFiles(), nil, identityFromSpec(nil, "x", ""), fixtureModules())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Omitted) != 0 || len(plan.Kept) != 2 {
+		t.Fatalf("kept=%v omitted=%v", plan.Kept, plan.Omitted)
+	}
+	if !strings.Contains(plan.Writes[foundationYMLPath], `application_name: "X"`) {
+		t.Fatalf("identity missing:\n%s", plan.Writes[foundationYMLPath])
 	}
 }
 
 func TestShapeRemoteIdentityAndOmit(t *testing.T) {
 	root := writeFullModuleFixture(t, fixtureModules())
-	files := fixtureRepoFiles()
-	// Build tree + blob map for the stub.
-	type blob struct {
-		sha, content string
-	}
-	blobs := map[string]blob{}
-	var treeEntries []any
-	i := 0
-	for path, content := range files {
-		i++
-		sha := fmt.Sprintf("sha-%d", i)
-		blobs[sha] = blob{sha: sha, content: content}
-		treeEntries = append(treeEntries, map[string]any{
-			"path": path, "type": "blob", "sha": sha, "size": float64(len(content)),
-		})
-	}
-
-	var treePosted bool
-	var commitPosted bool
-	var refPatched bool
-	var postedTree []any
-
-	e := newGHTestEnv(t, func(w http.ResponseWriter, r *http.Request, e *ghTestEnv) {
-		switch {
-		case r.URL.Path == "/user":
-			writeJSON(w, 200, map[string]any{"login": "velaoc"})
-		case r.URL.Path == "/repos/velaoc/driftline-coffee" && r.Method == http.MethodGet:
-			writeJSON(w, 200, map[string]any{"default_branch": "main"})
-		case strings.Contains(r.URL.Path, "/contents/config/foundation.yml") && r.Method == http.MethodGet:
-			writeJSON(w, 200, map[string]any{
-				"sha":     "yml-sha",
-				"content": base64.StdEncoding.EncodeToString([]byte(files[foundationYMLPath])),
-			})
-		case strings.HasPrefix(r.URL.Path, "/repos/velaoc/driftline-coffee/git/trees/"):
-			writeJSON(w, 200, map[string]any{"sha": "tree-sha", "tree": treeEntries})
-		case strings.HasPrefix(r.URL.Path, "/repos/velaoc/driftline-coffee/git/blobs/"):
-			sha := filepath.Base(r.URL.Path)
-			b, ok := blobs[sha]
-			if !ok {
-				writeJSON(w, 404, map[string]any{"message": "nope"})
-				return
-			}
-			writeJSON(w, 200, map[string]any{
-				"sha":     sha,
-				"content": base64.StdEncoding.EncodeToString([]byte(b.content)),
-			})
-		case r.URL.Path == "/repos/velaoc/driftline-coffee/git/ref/heads/main" && r.Method == http.MethodPatch:
-			refPatched = true
-			writeJSON(w, 200, map[string]any{"object": map[string]any{"sha": "new-commit"}})
-		case r.URL.Path == "/repos/velaoc/driftline-coffee/git/ref/heads/main":
-			writeJSON(w, 200, map[string]any{"object": map[string]any{"sha": "commit-base"}})
-		case r.URL.Path == "/repos/velaoc/driftline-coffee/git/commits/commit-base":
-			writeJSON(w, 200, map[string]any{"sha": "commit-base", "tree": map[string]any{"sha": "base-tree"}})
-		case r.URL.Path == "/repos/velaoc/driftline-coffee/git/trees" && r.Method == http.MethodPost:
-			treePosted = true
-			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			postedTree, _ = body["tree"].([]any)
-			writeJSON(w, 201, map[string]any{"sha": "new-tree"})
-		case r.URL.Path == "/repos/velaoc/driftline-coffee/git/commits" && r.Method == http.MethodPost:
-			commitPosted = true
-			writeJSON(w, 201, map[string]any{"sha": "new-commit"})
-		default:
-			writeJSON(w, 404, map[string]any{"message": "unhandled " + r.Method + " " + r.URL.Path})
-		}
-	})
-
+	stub := newShapeStub("driftline-coffee", fixtureRepoFiles())
+	e := newGHTestEnv(t, stub.handle)
 	e.tc.cfg.FoundationRoot = root
 	e.tc.cfg.SandboxURL = "https://demo.holode.xyz"
-	e.tc.appSpec = &AppSpec{
+	spec := &AppSpec{
 		Name:      "Driftline Coffee",
 		Purpose:   "Guests preorder coffee for pickup",
 		Entities:  []SpecEntity{{Name: "Order"}},
 		Workflows: []SpecWorkflow{{Name: "preorder"}},
-		Modules:   []string{"storefront"}, // keep shop, omit crm
+		Modules:   []string{"storefront"},
 		SeedDemo:  "Three drinks",
 	}
-
-	out := e.g.shapeGeneratedApp("driftline-coffee", e.tc.appSpec, e.tc.cfg)
+	out := e.g.shapeGeneratedApp("driftline-coffee", spec, e.tc.cfg)
 	if strings.HasPrefix(out, "shape error") {
 		t.Fatalf("shape failed: %s", out)
 	}
 	if !strings.Contains(out, "Driftline Coffee") || !strings.Contains(out, "crm") {
 		t.Fatalf("summary: %s", out)
 	}
-	if !treePosted || !commitPosted || !refPatched {
-		t.Fatalf("git data API not used: tree=%v commit=%v ref=%v", treePosted, commitPosted, refPatched)
+	if !stub.treePosted || !stub.commitPosted || !stub.refPatched {
+		t.Fatalf("git data API not used: tree=%v commit=%v ref=%v", stub.treePosted, stub.commitPosted, stub.refPatched)
 	}
-	// Posted tree must delete crm paths and write foundation.yml / README
-	var sawYML, sawREADME, sawCRMDelete bool
-	for _, raw := range postedTree {
-		entry, _ := raw.(map[string]any)
-		path, _ := entry["path"].(string)
-		switch path {
-		case foundationYMLPath:
-			sawYML = true
-			content, _ := entry["content"].(string)
-			if !strings.Contains(content, `application_name: "Driftline Coffee"`) {
-				t.Fatalf("yml content not stamped: %s", content)
-			}
-			if strings.Contains(content, "example.com") {
-				t.Fatal("example.com still in yml commit")
-			}
-		case readmePath:
-			sawREADME = true
-			content, _ := entry["content"].(string)
-			if !strings.Contains(content, identityStart) || !strings.Contains(content, "Guests preorder") {
-				t.Fatalf("readme bad: %s", content)
-			}
-		case "app/models/foundation/crm/contact.rb", "config/foundation/modules/crm.yml":
-			if entry["sha"] == nil {
-				sawCRMDelete = true
-			}
-		}
+	yml := stub.contentOf(foundationYMLPath)
+	if !strings.Contains(yml, `application_name: "Driftline Coffee"`) || strings.Contains(yml, "example.com") {
+		t.Fatalf("yml bad: %s", yml)
 	}
-	if !sawYML || !sawREADME {
-		t.Fatal("expected yml and readme in tree commit")
+	readme := stub.contentOf(readmePath)
+	if !strings.Contains(readme, identityStart) || !strings.Contains(readme, "Guests preorder") {
+		t.Fatalf("readme bad: %s", readme)
 	}
-	if !sawCRMDelete {
+	if !stub.deleted("app/models/foundation/crm/contact.rb") || !stub.deleted("config/foundation/modules/crm.yml") {
 		t.Fatal("expected crm path deletes in tree commit")
+	}
+}
+
+func TestStandaloneShapeActionDispatch(t *testing.T) {
+	cfg := testCfg(t)
+	cfg.GitHubToken = "t"
+	tc := &ToolCtx{cfg: cfg, authorID: "dev"}
+	out := tc.runGithub(toolArgs{Action: "shape"})
+	if !strings.Contains(out, "shape needs repo") {
+		t.Fatalf("shape should require repo: %s", out)
 	}
 }
 

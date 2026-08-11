@@ -137,18 +137,19 @@ func toolDefs(cfg *Config) []ToolDef {
 				"modules: foundation modules to KEEP (omit the rest at generation time). Declared modules: "+modList+". "+
 				"Unknown module names are rejected. integrations: external systems + demo_adapter bool. seed_demo: what demo data should show. "+
 				"Optional repo commits the validated JSON to "+appSpecRepoPath+" in the generated app (customer-owned intent record). "+
-				"BUILD FLOW: app_spec → create_rails_app → shape (identity, README, module omission) → focused edits → verify_repo → deploy_repo.",
+				"BUILD FLOW: app_spec → create_rails_app (auto-shapes identity/README/modules) → focused edits → verify_repo → deploy_repo.",
 			`{"type":"object","properties":{"action":{"type":"string","description":"set|amend|show"},"repo":{"type":"string","description":"optional generated app repo to commit docs/APP_SPEC.json into"},"name":{"type":"string"},"purpose":{"type":"string"},"actors":{"type":"array","items":{"type":"string"}},"entities":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"relationships":{"type":"array","items":{"type":"string"}}},"required":["name"]}},"workflows":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"description":{"type":"string"}},"required":["name"]}},"modules":{"type":"array","items":{"type":"string"},"description":"foundation module names to include"},"integrations":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"demo_adapter":{"type":"boolean"}},"required":["name"]}},"seed_demo":{"type":"string"}},"required":["action"]}`))
 	}
 	if cfg.GithubEnabled() { // API only — no shell; gated by VELA_REPO_USERS (empty = everyone)
 		defs = append(defs, mk("github",
 			"Create and populate GitHub repos and open pull requests via the API, as Vela's own account. This is API-ONLY — nothing runs on the box. Actions: "+
-				"create_rails_app {name, description?} — creates a Ruby on Rails app from Vela's configured production framework AFTER app_spec is set. The new repo starts PRIVATE, then is automatically SHAPED: stamps application_name/domain/support_email into config/foundation.yml, rewrites the README identity block and app README, and omits foundation modules not listed in app_spec.modules; "+
+				"create_rails_app {name, description?} — creates a Ruby on Rails app from Vela's configured production framework. The new repo starts PRIVATE. Prefer app_spec first, but create always auto-shapes even without one: stamps application_name/domain/support_email into config/foundation.yml (never leave Application/example.com), rewrites the app README, and omits foundation modules not listed in app_spec.modules when a spec is present. The returned result already lists what was shaped — do not redo shape; "+
+				"shape {repo} — optional re-shape of an existing generated app (identity/README/module omission). create_rails_app already shapes; only use this to re-apply after a later app_spec change; "+
 				"publish_app {repo} — makes a finished app public and forkable. Only after it carries the requested product's own identity and has passed verify_repo. Refused when the operator has publication turned off, which is normal; say so plainly rather than retrying; "+
 				"create_repo {name, description?} — legacy/non-app repository action; refused when the Rails framework is configured; "+
 				"search_code {repo, pattern, path?, glob?, ref?} — regex search over the remote repo (works on brand-new repos). Returns path:line: text like workspace search_code. SEARCH BEFORE read_files; narrow with path/glob; "+
 				"list_tree {repo, ref?, path?} — list paths only when you need structure, not contents; "+
-				"read_files {repo, paths:[up to 3 paths], ref?} — read only files you will edit; never re-read to hunt for symbols (use search_code); "+
+				"read_files {repo, paths:[up to 3], ref?, start_line?, end_line?} — read files you will edit (not symbol hunt; use search_code). Optional 1-based line range; omit for whole file. Large files return a window plus the exact next-range call — never fetch_url/shell for repo files; "+
 				"patch_file {repo, path, ops, message?, branch?} — targeted edits (same ops as apply_patch: replace|insert_after|insert_before|delete; each find must match exactly once or nothing is committed). Prefer for small edits; "+
 				"put_file {repo, path, content, message?, branch?} — REPLACES THE ENTIRE FILE and commits (new files or full rewrites only; repo is 'name' or 'owner/name'); "+
 				"delete_file {repo, path, message?, branch?} — deletes one file from a Vela-owned repository without shell/curl; "+
@@ -157,7 +158,7 @@ func toolDefs(cfg *Config) []ToolDef {
 				"enable_pages {repo} — legacy static publishing, never completion for an app request. "+
 				"TO DEPLOY AN APP: app_spec → create_rails_app (auto-shapes identity/README/modules) → focused edits → verify_repo → deploy_repo. Never substitute standalone HTML, Node, Python, Go, or PHP. "+
 				"To PR into someone else's repo: fork it, patch_file/put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
-			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|publish_app|search_code|list_tree|read_files|patch_file|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"pattern":{"type":"string"},"glob":{"type":"string"},"ops":{"type":"array","items":{"type":"object","properties":{"op":{"type":"string"},"find":{"type":"string"},"replace":{"type":"string"},"text":{"type":"string"}},"required":["op","find"]}},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
+			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|shape|publish_app|search_code|list_tree|read_files|patch_file|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"pattern":{"type":"string"},"glob":{"type":"string"},"start_line":{"type":"integer","description":"read_files: optional 1-based start line"},"end_line":{"type":"integer","description":"read_files: optional 1-based end line (inclusive)"},"ops":{"type":"array","items":{"type":"object","properties":{"op":{"type":"string"},"find":{"type":"string"},"replace":{"type":"string"},"text":{"type":"string"}},"required":["op","find"]}},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
 	if cfg.SandboxURL != "" && cfg.SandboxToken != "" && cfg.SandboxSecret != "" { // Holodex demo hosting
 		defs = append(defs, mk("deploy_demo",
@@ -189,8 +190,8 @@ func toolDefs(cfg *Config) []ToolDef {
 				"Search workspace file contents by regex pattern. Optional path confines to a subdirectory/file; optional glob filters by filepath (e.g. *.rb). Skips .git, node_modules, vendor, tmp, log, and binaries. Returns path:line: text, capped with an explicit truncation note.",
 				`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string","description":"optional subdirectory or file"},"glob":{"type":"string","description":"optional filepath.Match filter e.g. *.rb"}},"required":["pattern"]}`),
 			mk("read_file",
-				"Read a file from your workspace.",
-				`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`))
+				"Read a workspace file. Optional start_line/end_line (1-based, inclusive) for large files; truncated reads name total lines and the exact next-range call. Prefer this over shell/cat or fetch_url.",
+				`{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","description":"optional 1-based start line"},"end_line":{"type":"integer","description":"optional 1-based end line (inclusive)"}},"required":["path"]}`))
 		names := cfg.Secrets.Names()
 		desc := "Wipe deploy secrets from memory and disk when a deploy/task is done (do this as soon as you no longer need them). "
 		if len(names) > 0 {
@@ -251,6 +252,8 @@ type toolArgs struct {
 	Paths      []string   // github read_files: focused repository files
 	Ops        []patchOp  // apply_patch
 	Port       int        // deploy_demo: container app's listen port (optional)
+	StartLine  int        `json:"start_line"` // read_file / read_files: 1-based; 0 = omit
+	EndLine    int        `json:"end_line"`   // inclusive; 0 = omit (through EOF / budget)
 }
 
 type demoFile struct {
@@ -371,7 +374,7 @@ func (tc *ToolCtx) Run(name, args string) string {
 	case "search_code":
 		return tc.searchCode(a.Pattern, a.Path, a.Glob)
 	case "read_file":
-		return tc.readWorkspaceFile(a.Path)
+		return tc.readWorkspaceFile(a.Path, a.StartLine, a.EndLine)
 	}
 	return "tool error: unknown tool " + name
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,5 +318,93 @@ func TestApplyOpsUnit(t *testing.T) {
 	_, err = applyOps("z", []patchOp{{Op: "replace", Find: "", Replace: "b"}})
 	if err == nil || !strings.Contains(err.Error(), "non-empty") {
 		t.Fatalf("want empty-find error, got %v", err)
+	}
+}
+
+func TestReadFileWindowRangedExact(t *testing.T) {
+	content := "L1\nL2\nL3\nL4\nL5\n"
+	out := readFileWindow(content, 2, 4, readBudgetSingle, nil)
+	if out != "L2\nL3\nL4" {
+		t.Fatalf("ranged read: %q", out)
+	}
+}
+
+func TestReadFileWindowOverBudgetHonest(t *testing.T) {
+	// 200 lines of ~80 chars → well over a tight budget.
+	var b strings.Builder
+	for i := 1; i <= 200; i++ {
+		b.WriteString(strings.Repeat("x", 80))
+		b.WriteByte('\n')
+	}
+	const budget = 500
+	out := readFileWindow(b.String(), 0, 0, budget, func(next int) string {
+		return fmt.Sprintf(`read_file path="big.rb" start_line=%d`, next)
+	})
+	if !strings.Contains(out, "[truncated:") {
+		t.Fatalf("expected truncation note: %s", out)
+	}
+	if !strings.Contains(out, "of 200 total") {
+		t.Fatalf("expected total line count: %s", out)
+	}
+	if !strings.Contains(out, `read_file path="big.rb" start_line=`) {
+		t.Fatalf("expected continuation call: %s", out)
+	}
+	// Body before the note must stay within budget.
+	body, _, _ := strings.Cut(out, "\n[truncated:")
+	if len(body) > budget {
+		t.Fatalf("body %d exceeds budget %d", len(body), budget)
+	}
+}
+
+func TestReadFileWindowOutOfRange(t *testing.T) {
+	out := readFileWindow("a\nb\n", 10, 0, readBudgetSingle, nil)
+	if !strings.Contains(out, "past end of file") || !strings.Contains(out, "2 lines") {
+		t.Fatalf("want clear OOR error, got %q", out)
+	}
+	out = readFileWindow("a\nb\n", 2, 1, readBudgetSingle, nil)
+	if !strings.Contains(out, "before start_line") {
+		t.Fatalf("want end-before-start error, got %q", out)
+	}
+	// Empty result is not OK for OOR — must be an error string.
+	if strings.TrimSpace(out) == "" {
+		t.Fatal("OOR must not return empty")
+	}
+}
+
+func TestReadWorkspaceFileRangedAndExisting(t *testing.T) {
+	coder, ws := testCoder(t)
+	path := filepath.Join(ws, "src.rb")
+	var b strings.Builder
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&b, "line-%d\n", i)
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Existing whole-file path still works for small files.
+	whole := coder.readWorkspaceFile("src.rb", 0, 0)
+	if !strings.Contains(whole, "line-1") || !strings.Contains(whole, "line-20") {
+		t.Fatalf("whole read: %s", whole)
+	}
+	if strings.Contains(whole, "[truncated:") {
+		t.Fatalf("small file should not truncate: %s", whole)
+	}
+	got := coder.readWorkspaceFile("src.rb", 5, 7)
+	if got != "line-5\nline-6\nline-7" {
+		t.Fatalf("ranged workspace read: %q", got)
+	}
+}
+
+func TestReadFileWindowMultiBudgetConstant(t *testing.T) {
+	// Per-file multi budget is smaller than single, so 3× multi still near toolResultBudget.
+	if readBudgetMulti*3 > toolResultBudget {
+		t.Fatalf("3× multi (%d) exceeds toolResultBudget (%d)", readBudgetMulti*3, toolResultBudget)
+	}
+	if readBudgetSingle > toolResultBudget {
+		t.Fatalf("single (%d) exceeds toolResultBudget (%d)", readBudgetSingle, toolResultBudget)
+	}
+	// Ordinary routes-sized file (~9k) fits single budget.
+	if readBudgetSingle < 9000 {
+		t.Fatalf("single budget %d too small for ordinary source files", readBudgetSingle)
 	}
 }

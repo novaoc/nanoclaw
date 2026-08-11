@@ -106,7 +106,128 @@ func (tc *ToolCtx) writeWorkspaceFile(path, content string) string {
 	return fmt.Sprintf("wrote %s (%d bytes, +%d -%d lines)", path, len(content), add, del)
 }
 
-func (tc *ToolCtx) readWorkspaceFile(path string) string {
+// File-read budgets (content bytes). Outer agent clip is toolResultBudget.
+// Single-file fits ordinary sources (e.g. routes.rb ~9k); multi-file is per path
+// so a large first file cannot starve the others.
+const (
+	readBudgetSingle = 12000
+	readBudgetMulti  = 4500
+	toolResultBudget = 16000
+)
+
+// splitFileLines splits file content into lines without a trailing empty element
+// from a final newline (so "a\nb\n" → ["a","b"]).
+func splitFileLines(content string) []string {
+	if content == "" {
+		return nil
+	}
+	trim := strings.TrimSuffix(content, "\n")
+	if trim == "" {
+		return []string{""} // content was "\n"
+	}
+	return strings.Split(trim, "\n")
+}
+
+func clipRaw(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// readFileWindow returns a line range of content under a character budget.
+// startLine/endLine are 1-based inclusive; 0 means omitted (whole file / to EOF).
+// On truncation, appends an honest note with total lines and continueHint(nextStart).
+func readFileWindow(content string, startLine, endLine, budget int, continueHint func(nextStart int) string) string {
+	if budget <= 0 {
+		budget = readBudgetSingle
+	}
+	lines := splitFileLines(content)
+	total := len(lines)
+
+	if startLine < 0 || endLine < 0 {
+		return "read error: start_line and end_line must be >= 1 when set"
+	}
+	if total == 0 {
+		if startLine > 0 {
+			return fmt.Sprintf("read error: start_line %d is past end of file (0 lines)", startLine)
+		}
+		return ""
+	}
+
+	start := 1
+	if startLine > 0 {
+		start = startLine
+	}
+	end := total
+	if endLine > 0 {
+		end = endLine
+	}
+	if start > total {
+		return fmt.Sprintf("read error: start_line %d is past end of file (%d lines)", start, total)
+	}
+	if end < start {
+		return fmt.Sprintf("read error: end_line %d is before start_line %d", end, start)
+	}
+	if end > total {
+		end = total
+	}
+
+	var b strings.Builder
+	shownEnd := start - 1
+	partialLine := false
+	for i := start; i <= end; i++ {
+		line := lines[i-1]
+		prefix := ""
+		if i > start {
+			prefix = "\n"
+		}
+		need := len(prefix) + len(line)
+		if b.Len()+need <= budget {
+			b.WriteString(prefix)
+			b.WriteString(line)
+			shownEnd = i
+			continue
+		}
+		if b.Len() == 0 {
+			// Single line larger than budget: rune-safe prefix of that line.
+			b.WriteString(prefix)
+			b.WriteString(clipRaw(line, budget-len(prefix)))
+			shownEnd = i
+			partialLine = true
+		}
+		break
+	}
+
+	out := b.String()
+	if shownEnd < start {
+		return "read error: budget too small to return any content"
+	}
+	if !partialLine && shownEnd >= end {
+		return out
+	}
+	hint := func(next int) string {
+		if continueHint != nil {
+			return continueHint(next)
+		}
+		return fmt.Sprintf("start_line=%d", next)
+	}
+	if partialLine {
+		return out + fmt.Sprintf("\n[truncated: showed partial line %d of %d total. Continue with %s (line still incomplete)]",
+			shownEnd, total, hint(shownEnd))
+	}
+	next := shownEnd + 1
+	return out + fmt.Sprintf("\n[truncated: showed lines %d-%d of %d total. Continue with %s]",
+		start, shownEnd, total, hint(next))
+}
+
+func (tc *ToolCtx) readWorkspaceFile(path string, startLine, endLine int) string {
 	if g := tc.codeGate(); g != "" {
 		return g
 	}
@@ -119,7 +240,12 @@ func (tc *ToolCtx) readWorkspaceFile(path string) string {
 	if err != nil {
 		return "read error: " + err.Error()
 	}
-	return clip(string(b), 6000)
+	return readFileWindow(string(b), startLine, endLine, readBudgetSingle, func(next int) string {
+		if endLine > 0 {
+			return fmt.Sprintf("read_file path=%q start_line=%d end_line=%d", path, next, endLine)
+		}
+		return fmt.Sprintf("read_file path=%q start_line=%d", path, next)
+	})
 }
 
 // patchOp is one atomic edit inside apply_patch. Find must match exactly once

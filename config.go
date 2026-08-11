@@ -120,11 +120,12 @@ type Config struct {
 	Grok          *GrokAuth // SuperGrok / X Premium+ OAuth (device-code); set in LoadConfig
 	Workspace     string    // where code lives + shell runs
 	GitHubToken   string    // GITHUB_TOKEN — enables authenticated push
-	RailsTemplate string    // VELA_RAILS_TEMPLATE — private owner/repo used by create_rails_app
-	PublicApps    bool      // VELA_PUBLIC_APPS=1 — allow publish_app to make generated apps public
-	GitName       string    // commit identity (Vela's own account)
-	GitEmail      string
-	Secrets       *SecretStore // ephemeral deploy-key store (never in prompt/history)
+	RailsTemplate   string // VELA_RAILS_TEMPLATE — private owner/repo used by create_rails_app
+	FoundationRoot  string // VELA_FOUNDATION_ROOT — local foundation checkout; source of declared modules
+	PublicApps      bool   // VELA_PUBLIC_APPS=1 — allow publish_app to make generated apps public
+	GitName         string // commit identity (Vela's own account)
+	GitEmail        string
+	Secrets         *SecretStore // ephemeral deploy-key store (never in prompt/history)
 }
 
 // LoadConfig reads /etc/nanoclaw.env, /etc/vela.env, ./nanoclaw.env, then
@@ -201,11 +202,12 @@ func LoadConfig() (*Config, error) {
 		XAIVideoModel: get("XAI_VIDEO_MODEL", "grok-imagine-video-1.5"),
 		Workspace:     get("NANOCLAW_WORKSPACE", ""),
 		GitHubToken:   get("GITHUB_TOKEN", ""),
-		RailsTemplate: get("NANOCLAW_RAILS_TEMPLATE", ""),
-		PublicApps:    get("NANOCLAW_PUBLIC_APPS", "") == "1",
-		GitName:       get("GIT_NAME", "Vela"),
-		GitEmail:      get("GIT_EMAIL", ""),
-		RequestsForum: get("NANOCLAW_REQUESTS_FORUM", "requests"),
+		RailsTemplate:  get("NANOCLAW_RAILS_TEMPLATE", ""),
+		FoundationRoot: get("NANOCLAW_FOUNDATION_ROOT", ""),
+		PublicApps:     get("NANOCLAW_PUBLIC_APPS", "") == "1",
+		GitName:        get("GIT_NAME", "Vela"),
+		GitEmail:       get("GIT_EMAIL", ""),
+		RequestsForum:  get("NANOCLAW_REQUESTS_FORUM", "requests"),
 	}
 	if cfg.Workspace == "" {
 		cfg.Workspace = cfg.DataDir + "/workspace"

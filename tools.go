@@ -35,6 +35,7 @@ type ToolCtx struct {
 	boundary  *phaseBoundary
 	exhausted bool // this lane used its full tool budget without a final answer
 	repoReads int  // focused GitHub inspection calls; bounded to prevent analysis loops
+	appSpec   *AppSpec // structured build specification for the current turn/job
 }
 
 // phaseBoundary is an attempted web↔code transition. The tool stays blocked,
@@ -124,10 +125,24 @@ func toolDefs(cfg *Config) []ToolDef {
 				"delete removes a specific message (message=<id> in the current channel); slowmode sets per-user seconds (seconds=0 clears) on the current channel. Always state what you did and why.",
 			`{"type":"object","properties":{"action":{"type":"string","description":"timeout|kick|ban|delete|slowmode"},"user":{"type":"string"},"duration":{"type":"string","description":"timeout length e.g. 10m, 1h, 1d"},"reason":{"type":"string"},"message":{"type":"string","description":"message id to delete"},"seconds":{"type":"integer","description":"slowmode: per-user seconds (0 clears)"},"days":{"type":"integer","description":"ban: how many days of the user's messages to delete"}},"required":["action"]}`))
 	}
+	if cfg.GithubEnabled() || cfg.FoundationRoot != "" { // structured build spec; module list comes from the foundation checkout
+		modList := declaredModulesSummary(cfg.FoundationRoot)
+		defs = append(defs, mk("app_spec",
+			"Produce or revise the structured APPLICATION SPECIFICATION before writing product code. "+
+				"action=set replaces the whole spec (required fields: name, purpose, entities[], workflows[]); "+
+				"action=amend overlays fields onto the current spec and re-validates (rejected amendments leave the prior spec unchanged); "+
+				"action=show returns the current spec. "+
+				"entities: core domain objects with key relationships. workflows: primary things a user does. "+
+				"modules: foundation modules to KEEP (omit the rest at generation time). Declared modules: "+modList+". "+
+				"Unknown module names are rejected. integrations: external systems + demo_adapter bool. seed_demo: what demo data should show. "+
+				"Optional repo commits the validated JSON to "+appSpecRepoPath+" in the generated app (customer-owned intent record). "+
+				"BUILD FLOW: app_spec set → create_rails_app → commit spec if not already → focused Rails changes → verify_repo → deploy_repo.",
+			`{"type":"object","properties":{"action":{"type":"string","description":"set|amend|show"},"repo":{"type":"string","description":"optional generated app repo to commit docs/APP_SPEC.json into"},"name":{"type":"string"},"purpose":{"type":"string"},"actors":{"type":"array","items":{"type":"string"}},"entities":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"relationships":{"type":"array","items":{"type":"string"}}},"required":["name"]}},"workflows":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"description":{"type":"string"}},"required":["name"]}},"modules":{"type":"array","items":{"type":"string"},"description":"foundation module names to include"},"integrations":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"demo_adapter":{"type":"boolean"}},"required":["name"]}},"seed_demo":{"type":"string"}},"required":["action"]}`))
+	}
 	if cfg.GithubEnabled() { // API only — no shell; gated by VELA_REPO_USERS (empty = everyone)
 		defs = append(defs, mk("github",
 			"Create and populate GitHub repos and open pull requests via the API, as Vela's own account. This is API-ONLY — nothing runs on the box. Actions: "+
-				"create_rails_app {name, description?} — REQUIRED FIRST ACTION for every site/tool/app; creates a Ruby on Rails app from Vela's configured production framework. The new repo starts PRIVATE and holds the framework's placeholder identity; "+
+				"create_rails_app {name, description?} — creates a Ruby on Rails app from Vela's configured production framework AFTER app_spec is set. The new repo starts PRIVATE and holds the framework's placeholder identity; "+
 				"publish_app {repo} — makes a finished app public and forkable. Only after it carries the requested product's own identity and has passed verify_repo. Refused when the operator has publication turned off, which is normal; say so plainly rather than retrying; "+
 				"create_repo {name, description?} — legacy/non-app repository action; refused when the Rails framework is configured; "+
 				"list_tree {repo, ref?, path?} — inspect Vela's own repository in one call; optional path filters by prefix; "+
@@ -137,7 +152,7 @@ func toolDefs(cfg *Config) []ToolDef {
 				"open_pr {repo:'owner/name', title, head, base?, body?} — head is 'branch' (same repo) or 'forkowner:branch' (from a fork); "+
 				"fork {repo:'owner/name'}; "+
 				"enable_pages {repo} — legacy static publishing, never completion for an app request. "+
-				"TO DEPLOY AN APP: create_rails_app → focused put_file changes → verify_repo → deploy_repo. Never substitute standalone HTML, Node, Python, Go, or PHP. "+
+				"TO DEPLOY AN APP: app_spec → create_rails_app → focused put_file changes → verify_repo → deploy_repo. Never substitute standalone HTML, Node, Python, Go, or PHP. "+
 				"To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
 			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|publish_app|list_tree|read_files|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
@@ -278,7 +293,8 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// arbitrary outbound GET — after a code turn (which can read env/tokens) it
 	// would otherwise be an exfiltration channel via the URL.
 	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart" || name == "attach_image" || name == "model_releases" || name == "generate_image" || name == "generate_video"
-	code := name == "shell" || name == "write_file" || name == "apply_patch" || name == "search_code" || name == "read_file" || name == "github" || name == "deploy_demo" || name == "verify_repo" || name == "deploy_repo"
+	// app_spec is structural (may commit via GitHub) — treat as code lane when it touches the repo.
+	code := name == "shell" || name == "write_file" || name == "apply_patch" || name == "search_code" || name == "read_file" || name == "github" || name == "deploy_demo" || name == "verify_repo" || name == "deploy_repo" || name == "app_spec"
 	if web && tc.usedCode {
 		tc.boundary = &phaseBoundary{Lane: "web", Tool: name}
 		return "PHASE_BOUNDARY: web fetch deferred to a fresh isolated read-only phase."
@@ -333,6 +349,8 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// The code handlers set usedCode themselves AFTER their allowlist gates
 	// pass — a REFUSED call ran nothing, so it must not poison the rest of the
 	// turn (blocking every later web tool with "this turn already ran code").
+	case "app_spec":
+		return tc.runAppSpec(args)
 	case "github":
 		return tc.runGithub(a)
 	case "deploy_demo":

@@ -79,7 +79,8 @@ func TestRailsTemplateActionCreatesPublishableAppsWithoutExposingTemplate(t *tes
 	}
 	// Applications are generated private and become public only through the
 	// operator-gated publish step, so the model must be told both halves.
-	if !strings.Contains(description, "create_rails_app") || !strings.Contains(description, "REQUIRED FIRST ACTION") || !strings.Contains(description, "PRIVATE") {
+	// Spec stage comes first (app_spec tool); create_rails_app still scaffolds.
+	if !strings.Contains(description, "create_rails_app") || !strings.Contains(description, "app_spec") || !strings.Contains(description, "PRIVATE") {
 		t.Fatal("GitHub tool does not enforce the Rails application path")
 	}
 	if !strings.Contains(description, "publish_app") || !strings.Contains(description, "public and forkable") {

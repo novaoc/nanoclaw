@@ -137,13 +137,13 @@ func toolDefs(cfg *Config) []ToolDef {
 				"modules: foundation modules to KEEP (omit the rest at generation time). Declared modules: "+modList+". "+
 				"Unknown module names are rejected. integrations: external systems + demo_adapter bool. seed_demo: what demo data should show. "+
 				"Optional repo commits the validated JSON to "+appSpecRepoPath+" in the generated app (customer-owned intent record). "+
-				"BUILD FLOW: app_spec set → create_rails_app → commit spec if not already → focused Rails changes → verify_repo → deploy_repo.",
+				"BUILD FLOW: app_spec → create_rails_app → shape (identity, README, module omission) → focused edits → verify_repo → deploy_repo.",
 			`{"type":"object","properties":{"action":{"type":"string","description":"set|amend|show"},"repo":{"type":"string","description":"optional generated app repo to commit docs/APP_SPEC.json into"},"name":{"type":"string"},"purpose":{"type":"string"},"actors":{"type":"array","items":{"type":"string"}},"entities":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"relationships":{"type":"array","items":{"type":"string"}}},"required":["name"]}},"workflows":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"description":{"type":"string"}},"required":["name"]}},"modules":{"type":"array","items":{"type":"string"},"description":"foundation module names to include"},"integrations":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"demo_adapter":{"type":"boolean"}},"required":["name"]}},"seed_demo":{"type":"string"}},"required":["action"]}`))
 	}
 	if cfg.GithubEnabled() { // API only — no shell; gated by VELA_REPO_USERS (empty = everyone)
 		defs = append(defs, mk("github",
 			"Create and populate GitHub repos and open pull requests via the API, as Vela's own account. This is API-ONLY — nothing runs on the box. Actions: "+
-				"create_rails_app {name, description?} — creates a Ruby on Rails app from Vela's configured production framework AFTER app_spec is set. The new repo starts PRIVATE and holds the framework's placeholder identity; "+
+				"create_rails_app {name, description?} — creates a Ruby on Rails app from Vela's configured production framework AFTER app_spec is set. The new repo starts PRIVATE, then is automatically SHAPED: stamps application_name/domain/support_email into config/foundation.yml, rewrites the README identity block and app README, and omits foundation modules not listed in app_spec.modules; "+
 				"publish_app {repo} — makes a finished app public and forkable. Only after it carries the requested product's own identity and has passed verify_repo. Refused when the operator has publication turned off, which is normal; say so plainly rather than retrying; "+
 				"create_repo {name, description?} — legacy/non-app repository action; refused when the Rails framework is configured; "+
 				"search_code {repo, pattern, path?, glob?, ref?} — regex search over the remote repo (works on brand-new repos). Returns path:line: text like workspace search_code. SEARCH BEFORE read_files; narrow with path/glob; "+
@@ -155,7 +155,7 @@ func toolDefs(cfg *Config) []ToolDef {
 				"open_pr {repo:'owner/name', title, head, base?, body?} — head is 'branch' (same repo) or 'forkowner:branch' (from a fork); "+
 				"fork {repo:'owner/name'}; "+
 				"enable_pages {repo} — legacy static publishing, never completion for an app request. "+
-				"TO DEPLOY AN APP: app_spec → create_rails_app → search_code → patch_file (put_file only for new/full files) → verify_repo → deploy_repo. Never substitute standalone HTML, Node, Python, Go, or PHP. "+
+				"TO DEPLOY AN APP: app_spec → create_rails_app (auto-shapes identity/README/modules) → focused edits → verify_repo → deploy_repo. Never substitute standalone HTML, Node, Python, Go, or PHP. "+
 				"To PR into someone else's repo: fork it, patch_file/put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
 			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|publish_app|search_code|list_tree|read_files|patch_file|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"pattern":{"type":"string"},"glob":{"type":"string"},"ops":{"type":"array","items":{"type":"object","properties":{"op":{"type":"string"},"find":{"type":"string"},"replace":{"type":"string"},"text":{"type":"string"}},"required":["op","find"]}},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}

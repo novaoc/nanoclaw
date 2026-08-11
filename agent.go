@@ -264,14 +264,14 @@ hardware is what's tiny.)
   Every repo you create on request is public and forkable. Never put an API
   key, OAuth secret, signing secret, password, or private deployment setting in
   it — commit placeholders and setup instructions instead.
-  DEPLOYING A SITE OR APP: the house flow is app_spec (structured specification)
-  → create_rails_app → commit docs/APP_SPEC.json if not already → focused Rails
-  changes → verify_repo → deploy_repo → hand back BOTH the public repo and live
+  DEPLOYING A SITE OR APP: the house flow is app_spec → create_rails_app →
+  shape (identity, README, module omission — automatic on create) → focused
+  edits → verify_repo → deploy_repo → hand back BOTH the public repo and live
   demo link, noting the demo deck WIPES DAILY at 3AM Mexico City while the repo
-  is theirs to keep. A static artifact is only a design preview, never the
-  completed app. Do not build application requests in Node, Python, Go, PHP, or
-  standalone HTML. ONLY deploy apps you built yourself here — never
-  clone-and-host someone else's repo.
+  is theirs to keep. Commit docs/APP_SPEC.json if not already. A static artifact
+  is only a design preview, never the completed app. Do not build application
+  requests in Node, Python, Go, PHP, or standalone HTML. ONLY deploy apps you
+  built yourself here — never clone-and-host someone else's repo.
   Same hard lines as everything else — no scam pages, no impersonation, nothing
   deceptive, ever.
 
@@ -295,8 +295,12 @@ app needs something you missed; rejected amendments leave the prior spec intact.
 Commit the accepted JSON to docs/APP_SPEC.json in the generated repo (customer-
 owned intent record). Then create_rails_app so the resulting
 repo is public and forkable while your private Vela Rails foundation remains
-the canonical source. Keep its security contracts intact: prices and payment
-amounts come from the server, Stripe fulfillment comes only from a verified
+the canonical source.
+create_rails_app automatically shapes the fork: stamps application_name, domain,
+and support_email (never leave example.com — production hosts 403 otherwise),
+rewrites the README identity block and app README for THIS product, and omits
+foundation modules not listed in app_spec.modules. Keep its security contracts
+intact: prices and payment amounts come from the server, Stripe fulfillment comes only from a verified
 idempotent webhook, and OAuth identities are never merged merely because an
 email matches. Do not store OAuth tokens unless the requested product truly
 needs them. Push an immutable commit, run verify_repo, and only
@@ -677,14 +681,21 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 	originalRequest := content
 	// Per-turn deadline: a hung upstream can't hold the single concurrency slot
 	// forever. Generous (turns normally finish in seconds) — this is a safety net.
-	dl := time.Duration(toolIters*passes) * 30 * time.Second
+	// Thirty seconds an iteration suits conversation, where a tool call is an
+	// API round trip. An application build is not that: it clones a template,
+	// makes many repository calls, and waits on a remote Docker test and image
+	// build, so a single iteration can take minutes. Budgeting it at
+	// conversation rates capped builds around ten minutes and killed them
+	// mid-flight with "turn deadline reached" — the thirty-minute allowance
+	// below was unreachable, because the derived value never grew large enough
+	// to be clamped by it.
+	perIteration := 30 * time.Second
 	maxDeadline := 12 * time.Minute
 	if a.cfg.Coders[authorID] {
-		// Trusted application builds include a remote Docker test/image build.
-		// Keep the short ceiling for ordinary conversation, while allowing the
-		// verified Rails pipeline enough time to return its receipt and deploy.
+		perIteration = 90 * time.Second
 		maxDeadline = 30 * time.Minute
 	}
+	dl := time.Duration(toolIters*passes) * perIteration
 	if dl < 3*time.Minute {
 		dl = 3 * time.Minute
 	} else if dl > maxDeadline {

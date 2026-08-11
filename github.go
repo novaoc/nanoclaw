@@ -73,8 +73,19 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		if tc.cfg.RailsTemplate == "" {
 			return "the private Vela Rails foundation isn't configured on this instance"
 		}
+		if tc.appSpec == nil {
+			return "github error: set app_spec before create_rails_app (build flow: app_spec → create_rails_app → shape → focused edits → verify_repo → deploy_repo)"
+		}
 		tc.usedCode = true
-		return gh.createFromTemplate(tc.cfg.RailsTemplate, a.Name, a.Description, tc.cfg.PublicApps)
+		tc.ensureGHCache()
+		gh.cache = tc.ghCache
+		out := gh.createFromTemplate(tc.cfg.RailsTemplate, a.Name, a.Description, tc.cfg.PublicApps)
+		if !strings.HasPrefix(out, "created Rails app") {
+			return out
+		}
+		// Post-generation shaping: identity, app README, module omission.
+		shapeOut := gh.shapeGeneratedApp(a.Name, tc.appSpec, tc.cfg)
+		return out + "\n" + shapeOut
 	case "publish_app":
 		if a.Repo == "" {
 			return "github error: publish_app needs repo"
@@ -776,9 +787,9 @@ func (g *ghClient) createFromTemplate(template, name, desc string, public bool) 
 	}
 	u, _ := m["html_url"].(string)
 	if public {
-		return fmt.Sprintf("created Rails app %s from Vela's production foundation — public and forkable. Give it its own identity and verify it.", u)
+		return fmt.Sprintf("created Rails app %s from Vela's production foundation — public and forkable. Shaping identity/README/modules next.", u)
 	}
-	return fmt.Sprintf("created Rails app %s from Vela's production foundation (private on this instance). Give it its own identity, verify it, then use publish_app to make it public and forkable.", u)
+	return fmt.Sprintf("created Rails app %s from Vela's production foundation (private on this instance). Shaping identity/README/modules next; after verify, use publish_app to make it public and forkable.", u)
 }
 
 // publishApp makes a generated application public once it carries its own

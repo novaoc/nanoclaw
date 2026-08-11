@@ -41,10 +41,10 @@ func ghEsc(p string) string {
 
 // runGithub is the tool entry point: allowlist gate, then dispatch. It runs no
 // code on the box — only GitHub API writes as Vela's account — so it's open to
-// the whole server unless NANOCLAW_REPO_USERS narrows it. Every call is logged.
+// the whole server unless VELA_REPO_USERS narrows it. Every call is logged.
 func (tc *ToolCtx) runGithub(a toolArgs) string {
 	if !tc.cfg.RepoAllowed(tc.authorID) {
-		return "REFUSED: the GitHub tool is limited to an allowlist (NANOCLAW_REPO_USERS) on this server, and this user isn't on it. Tell them plainly."
+		return "REFUSED: the GitHub tool is limited to an allowlist (VELA_REPO_USERS) on this server, and this user isn't on it. Tell them plainly."
 	}
 	gh := newGH(tc.cfg)
 	if gh == nil {
@@ -164,7 +164,7 @@ func (g *ghClient) do(method, path string, body any) (map[string]any, int, error
 	req.Header.Set("Authorization", "Bearer "+g.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "nanoclaw")
+	req.Header.Set("User-Agent", "vela")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -375,7 +375,7 @@ func (g *ghClient) downloadArchive(repo, ref, tempDir string) (string, string, e
 	req.Header.Set("Authorization", "Bearer "+g.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "nanoclaw")
+	req.Header.Set("User-Agent", "vela")
 	client := *ssrfClient
 	client.Timeout = 2 * time.Minute
 	resp, err := client.Do(req)

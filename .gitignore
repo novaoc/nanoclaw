@@ -1,3 +1,7 @@
+vela
+vela-riscv64
+vela-eval-riscv64
+vela.env
 nanoclaw
 nanoclaw-riscv64
 nanoclaw-eval-riscv64

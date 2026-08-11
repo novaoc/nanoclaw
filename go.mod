@@ -1,4 +1,4 @@
-module github.com/novaoc/nanoclaw
+module github.com/novaoc/vela
 
 go 1.25.6
 

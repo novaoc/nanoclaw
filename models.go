@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"net/url"
 	"os"
@@ -15,14 +16,15 @@ import (
 // file on the SD), and flag which are new since last check — so "any new models
 // out?" gives a real, dated answer instead of a guess.
 
-// trackedLabs are the HF orgs worth watching; overridable via NANOCLAW_MODEL_ORGS.
+// trackedLabs are the HF orgs worth watching; overridable via VELA_MODEL_ORGS
+// (legacy NANOCLAW_MODEL_ORGS still honored).
 var trackedLabs = []string{
 	"deepseek-ai", "Qwen", "meta-llama", "mistralai", "google",
 	"openai", "microsoft", "nvidia", "moonshotai", "zai-org",
 }
 
 func modelOrgs(cfg *Config) []string {
-	if v := strings.TrimSpace(os.Getenv("NANOCLAW_MODEL_ORGS")); v != "" {
+	if v := strings.TrimSpace(cmp.Or(os.Getenv("VELA_MODEL_ORGS"), os.Getenv("NANOCLAW_MODEL_ORGS"))); v != "" {
 		var out []string
 		for _, o := range strings.Split(v, ",") {
 			if o = strings.TrimSpace(o); o != "" {

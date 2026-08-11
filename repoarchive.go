@@ -24,7 +24,7 @@ type repoArchiveParams struct {
 
 func (p repoArchiveParams) canonical() string {
 	return strings.Join([]string{
-		"holodeck-archive-v1",
+		"holodex-archive-v1",
 		p.Action,
 		p.Name,
 		p.Target,
@@ -115,7 +115,7 @@ func (tc *ToolCtx) deployRepo(a toolArgs) string {
 
 func (tc *ToolCtx) repoBuildGate(repo string) string {
 	if tc.cfg.SandboxURL == "" || tc.cfg.SandboxToken == "" || tc.cfg.SandboxSecret == "" {
-		return "Holodeck repository builds aren't fully configured (NANOCLAW_SANDBOX_URL/TOKEN/SECRET)."
+		return "Holodex repository builds aren't fully configured (VELA_SANDBOX_URL/TOKEN/SECRET)."
 	}
 	if tc.cfg.GitHubToken == "" {
 		return "GitHub isn't configured, so Vela can't fetch the repository archive."
@@ -131,7 +131,7 @@ func (tc *ToolCtx) repoBuildGate(repo string) string {
 }
 
 // sendRepoArchive downloads a private/public GitHub repository with Vela's
-// token, then streams the archive to Holodeck. The token never leaves the Nano;
+// token, then streams the archive to Holodex. The token never leaves the Nano;
 // only source bytes plus their provenance signature cross the boundary.
 func (tc *ToolCtx) sendRepoArchive(repo, ref, endpoint string, p repoArchiveParams, receipt string) (string, string) {
 	gh := newGH(tc.cfg)
@@ -160,26 +160,26 @@ func (tc *ToolCtx) sendRepoArchive(repo, ref, endpoint string, p repoArchivePara
 	req.ContentLength = st.Size()
 	req.Header.Set("Authorization", "Bearer "+tc.cfg.SandboxToken)
 	req.Header.Set("Content-Type", "application/gzip")
-	req.Header.Set("X-Holodeck-Sign", sig)
-	req.Header.Set("X-Holodeck-Name", p.Name)
-	req.Header.Set("X-Holodeck-Target", p.Target)
-	req.Header.Set("X-Holodeck-Dockerfile", p.Dockerfile)
+	req.Header.Set("X-Holodex-Sign", sig)
+	req.Header.Set("X-Holodex-Name", p.Name)
+	req.Header.Set("X-Holodex-Target", p.Target)
+	req.Header.Set("X-Holodex-Dockerfile", p.Dockerfile)
 	if p.Port != 0 {
-		req.Header.Set("X-Holodeck-Port", strconv.Itoa(p.Port))
+		req.Header.Set("X-Holodex-Port", strconv.Itoa(p.Port))
 	}
 	if receipt != "" {
-		req.Header.Set("X-Holodeck-Verify", receipt)
+		req.Header.Set("X-Holodex-Verify", receipt)
 	}
 	client := *ssrfClient
 	client.Timeout = 20 * time.Minute
 	resp, err := client.Do(req)
 	if err != nil {
-		return "Holodeck request failed: " + err.Error(), ""
+		return "Holodex request failed: " + err.Error(), ""
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode >= 400 {
-		return fmt.Sprintf("Holodeck %d for %s@%s: %.12000s", resp.StatusCode, repo, sha, raw), ""
+		return fmt.Sprintf("Holodex %d for %s@%s: %.12000s", resp.StatusCode, repo, sha, raw), ""
 	}
 	return string(raw), sha
 }

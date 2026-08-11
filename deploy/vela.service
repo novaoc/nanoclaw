@@ -1,14 +1,16 @@
 # systemd unit — for LicheeRV Nano images that ship systemd (e.g. Debian/sd).
-# Install: cp to /etc/systemd/system/ && systemctl enable --now nanoclaw
+# Install: cp to /etc/systemd/system/ && systemctl enable --now vela
 [Unit]
-Description=nanoclaw pocket AI agent
+Description=Vela pocket AI agent
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/root/nanoclaw
+ExecStart=/root/vela
 WorkingDirectory=/root
-EnvironmentFile=/etc/nanoclaw.env
+# VELA_* keys are preferred; legacy NANOCLAW_* keys in either file still work.
+EnvironmentFile=-/etc/vela.env
+EnvironmentFile=-/etc/nanoclaw.env
 Restart=always
 RestartSec=10
 # 256 MB board — keep the agent honest

@@ -13,7 +13,7 @@ import (
 // Headless eval harness: drive the real agent loop over a list of prompts,
 // one at a time, and log per-request latency, resident-set size, artifacts,
 // and the reply. Runs on the board so the actual 128 MB RAM takes the load.
-// Invoked as `nanoclaw eval <prompts.jsonl> <out.jsonl>`. Each prompt line is
+// Invoked as `vela eval <prompts.jsonl> <out.jsonl>`. Each prompt line is
 // {"n":1,"cat":"card","ch":"c1","msg":"...","coder":false}. Same ch across
 // lines shares history (multi-turn context tests); a fresh ch is isolated.
 

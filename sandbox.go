@@ -13,12 +13,12 @@ import (
 	"strings"
 )
 
-// deploy_demo — Vela's own demo hosting (the holodeck,
-// github.com/novaoc/holodeck). She POSTs an app's files to the sandbox and gets
+// deploy_demo — Vela's own demo hosting (the Holodex,
+// github.com/novaoc/holodex). She POSTs an app's files to the sandbox and gets
 // a live URL on its domain; the whole deck wipes daily, so the GitHub repo
 // (github tool) is the permanent copy. An app is either a static bundle (an
 // index.html) or a real app (include a Dockerfile — Node, Python, Go, …). Every
-// deploy is HMAC-signed with the shared build secret so holodeck can prove it
+// deploy is HMAC-signed with the shared build secret so Holodex can prove it
 // came from Vela's own pipeline and refuse anything else.
 
 func (tc *ToolCtx) deployDemo(a toolArgs) string {
@@ -61,7 +61,7 @@ func (tc *ToolCtx) deployDemo(a toolArgs) string {
 	}
 	req.Header.Set("Authorization", "Bearer "+tc.cfg.SandboxToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Holodeck-Sign", signBody(tc.cfg.SandboxSecret, body)) // provenance
+	req.Header.Set("X-Holodex-Sign", signBody(tc.cfg.SandboxSecret, body)) // provenance
 	resp, err := ssrfClient.Do(req)
 	if err != nil {
 		return "deploy error: " + err.Error()
@@ -69,17 +69,17 @@ func (tc *ToolCtx) deployDemo(a toolArgs) string {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 400 {
-		return fmt.Sprintf("deploy failed — holodeck %d: %.500s", resp.StatusCode, raw)
+		return fmt.Sprintf("deploy failed — holodex %d: %.500s", resp.StatusCode, raw)
 	}
 	var out struct{ URL, Slug, Kind, Expires string }
 	if json.Unmarshal(raw, &out) != nil || out.URL == "" {
-		return "deploy failed — holodeck sent back something unusable."
+		return "deploy failed — Holodex sent back something unusable."
 	}
-	log.Printf("holodeck deploy by=%s name=%q slug=%s kind=%s", tc.authorID, a.Name, out.Slug, out.Kind)
+	log.Printf("holodex deploy by=%s name=%q slug=%s kind=%s", tc.authorID, a.Name, out.Slug, out.Kind)
 	return fmt.Sprintf("Live at %s — the demo deck wipes daily (next: %s), so the repo is the permanent copy.", out.URL, out.Expires)
 }
 
-// signBody is the HMAC-SHA256 provenance signature holodeck verifies.
+// signBody is the HMAC-SHA256 provenance signature Holodex verifies.
 func signBody(secret string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)

@@ -124,7 +124,7 @@ func toolDefs(cfg *Config) []ToolDef {
 				"delete removes a specific message (message=<id> in the current channel); slowmode sets per-user seconds (seconds=0 clears) on the current channel. Always state what you did and why.",
 			`{"type":"object","properties":{"action":{"type":"string","description":"timeout|kick|ban|delete|slowmode"},"user":{"type":"string"},"duration":{"type":"string","description":"timeout length e.g. 10m, 1h, 1d"},"reason":{"type":"string"},"message":{"type":"string","description":"message id to delete"},"seconds":{"type":"integer","description":"slowmode: per-user seconds (0 clears)"},"days":{"type":"integer","description":"ban: how many days of the user's messages to delete"}},"required":["action"]}`))
 	}
-	if cfg.GithubEnabled() { // API only — no shell; gated by NANOCLAW_REPO_USERS (empty = everyone)
+	if cfg.GithubEnabled() { // API only — no shell; gated by VELA_REPO_USERS (empty = everyone)
 		defs = append(defs, mk("github",
 			"Create and populate GitHub repos and open pull requests via the API, as Vela's own account. This is API-ONLY — nothing runs on the box. Actions: "+
 				"create_rails_app {name, description?} — REQUIRED FIRST ACTION for every site/tool/app; creates an ALWAYS-PUBLIC Ruby on Rails app from Vela's configured production framework so others can fork and self-host it; "+
@@ -140,24 +140,24 @@ func toolDefs(cfg *Config) []ToolDef {
 				"To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
 			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|list_tree|read_files|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
-	if cfg.SandboxURL != "" && cfg.SandboxToken != "" && cfg.SandboxSecret != "" { // holodeck demo hosting
+	if cfg.SandboxURL != "" && cfg.SandboxToken != "" && cfg.SandboxSecret != "" { // Holodex demo hosting
 		defs = append(defs, mk("deploy_demo",
-			"Legacy lightweight artifact deploy. When NANOCLAW_RAILS_TEMPLATE is configured this refuses application deployment: every Vela app must use create_rails_app → verify_repo → deploy_repo. Never use this to bypass the Rails framework. The whole deck WIPES DAILY at 3AM Mexico City.",
+			"Legacy lightweight artifact deploy. When the Rails foundation (VELA_RAILS_TEMPLATE) is configured this refuses application deployment: every Vela app must use create_rails_app → verify_repo → deploy_repo. Never use this to bypass the Rails framework. The whole deck WIPES DAILY at 3AM Mexico City.",
 			`{"type":"object","properties":{"name":{"type":"string","description":"short app name — becomes the subdomain slug"},"port":{"type":"integer","description":"container app's listen port (optional; else EXPOSE or 8080)"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string","description":"relative path, e.g. index.html, Dockerfile, src/app.js"},"content":{"type":"string"}},"required":["path","content"]}}},"required":["name","files"]}`))
 		if cfg.CodeEnabled() && cfg.GithubEnabled() {
 			defs = append(defs,
 				mk("verify_repo",
-					"Build and test a whole GitHub repository on Holodeck's disposable build server instead of the tiny Nano. Coder-only. Downloads with Vela's token (private repos work), streams source without exposing the token, builds the Dockerfile's `test` target and deployable final image, then returns bounded logs plus a signed one-hour receipt tied to the exact commit/archive. Use after pushing code and BEFORE deploy_repo. Args: repo='name' or 'owner/name'; ref optional branch/SHA; target defaults to test; dockerfile defaults to Dockerfile.",
+					"Build and test a whole GitHub repository on Holodex's disposable build server instead of the tiny Nano. Coder-only. Downloads with Vela's token (private repos work), streams source without exposing the token, builds the Dockerfile's `test` target and deployable final image, then returns bounded logs plus a signed one-hour receipt tied to the exact commit/archive. Use after pushing code and BEFORE deploy_repo. Args: repo='name' or 'owner/name'; ref optional branch/SHA; target defaults to test; dockerfile defaults to Dockerfile.",
 					`{"type":"object","properties":{"repo":{"type":"string"},"ref":{"type":"string","description":"branch/tag/SHA; defaults to repository default branch"},"name":{"type":"string","description":"build display name; defaults to repo"},"target":{"type":"string","description":"Docker build target; defaults to test"},"dockerfile":{"type":"string","description":"Dockerfile path; defaults to Dockerfile"}},"required":["repo"]}`),
 				mk("deploy_repo",
-					"Deploy a verified Ruby on Rails GitHub repository to Holodeck, coder-only. REQUIRED for every Vela application. REQUIRES the exact commit SHA and signed receipt returned by verify_repo; Holodeck rejects changed, expired, or untested source. Runtime remains locked down with no internet egress and the whole deck wipes daily.",
+					"Deploy a verified Ruby on Rails GitHub repository to Holodex, coder-only. REQUIRED for every Vela application. REQUIRES the exact commit SHA and signed receipt returned by verify_repo; Holodex rejects changed, expired, or untested source. Runtime remains locked down with no internet egress and the whole deck wipes daily.",
 					`{"type":"object","properties":{"repo":{"type":"string"},"name":{"type":"string","description":"app/display name"},"ref":{"type":"string","description":"exact commit SHA returned by verify_repo"},"receipt":{"type":"string","description":"signed receipt returned by verify_repo"},"port":{"type":"integer","description":"listen port; otherwise root Dockerfile EXPOSE or 8080"}},"required":["repo","name","ref","receipt"]}`))
 		}
 	}
-	if cfg.CodeEnabled() { // gated to the coder allowlist (NANOCLAW_CODERS)
+	if cfg.CodeEnabled() { // gated to the coder allowlist (VELA_CODERS)
 		defs = append(defs,
 			mk("shell",
-				"Run a shell command in your code workspace (persists across turns). Use for git, libraries, builds, tests, and scaffolding. 180s timeout. You run on a memory-limited single-core RISC-V board; keep local work light and use verify_repo for heavy repository builds. NOTE: code and web fetches run in isolated phases (injection guard); NanoClaw checkpoints and changes phases automatically, so never ask the user to say continue just to switch.",
+				"Run a shell command in your code workspace (persists across turns). Use for git, libraries, builds, tests, and scaffolding. 180s timeout. You run on a memory-limited single-core RISC-V board; keep local work light and use verify_repo for heavy repository builds. NOTE: code and web fetches run in isolated phases (injection guard); Vela checkpoints and changes phases automatically, so never ask the user to say continue just to switch.",
 				`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`),
 			mk("write_file",
 				"Write a file in your workspace (creates dirs). Prefer this over shell heredocs for writing code.",
@@ -408,7 +408,7 @@ func getPage(u string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; nanoclaw/1.0)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; vela/1.0)")
 	resp, err := ssrfClient.Do(req)
 	if err != nil {
 		return "", err

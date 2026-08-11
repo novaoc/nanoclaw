@@ -19,9 +19,10 @@ open a goal-framed request for the community. It searches and reads sources,
 creates public forkable repositories, deploys throwaway live demos, and
 remembers your server's projects across reboots.
 
-Vela is the product and repository name. Existing 2.x installations retain
-the `NANOCLAW_*` configuration prefix and legacy service filenames so upgrades
-do not silently lose credentials or data.
+Vela is the product and repository name. New installs use the `VELA_*`
+configuration prefix; existing 2.x installations keep working because the
+legacy `NANOCLAW_*` keys, env file paths, and service filenames are still
+honored, so upgrades do not silently lose credentials or data.
 
 ## How it works
 
@@ -51,13 +52,13 @@ reply + attachments ◄─ 2000-char splitting ◄─┘  per-channel history on
 - **Lives in the group** (2.0): sees every channel message, and occasionally
   chimes in unprompted when the conversation genuinely interests her — gated
   by a local willingness model (zero API cost for the messages she skips) and
-  tunable with `NANOCLAW_TALK_VALUE`.
+  tunable with `VELA_TALK_VALUE`.
 - **Sees images**: an attached picture (in the message or the one it replies to)
   is read by a vision model and folded into the turn — snap a card, get its price.
 - Per-channel conversation history and one shared long-term memory file,
   both plain files on the microSD — room for a lifetime of artifacts.
 - **One turn at a time** (requests queue, with an ⏳ react so waiters know) and a
-  180 MB memory cap — tuned for the Nano's RAM. `NANOCLAW_CONCURRENCY` to raise it.
+  180 MB memory cap — tuned for the Nano's RAM. `VELA_CONCURRENCY` to raise it.
 
 ## Setup
 
@@ -75,22 +76,22 @@ does the tool calling; a heavy day of use costs pennies.
 Flash the official image to the microSD
 ([wiki](https://wiki.sipeed.com/hardware/en/lichee/RV_Nano/1_intro.html)),
 get it on WiFi/Ethernet, note its IP. Make a data dir on the SD's big
-partition, e.g. `mkdir -p /mnt/sd/nanoclaw`.
+partition, e.g. `mkdir -p /mnt/sd/vela`.
 
 ### 4. Build, configure, deploy
 
 ```bash
 make riscv64                          # cross-compile from any machine with Go
-scp nanoclaw-riscv64 root@<nano-ip>:/root/nanoclaw
-scp nanoclaw.env.example root@<nano-ip>:/etc/nanoclaw.env
-# edit /etc/nanoclaw.env on the board: token, key, FOCUS_CHANNELS, data dir
+scp vela-riscv64 root@<nano-ip>:/root/vela
+scp vela.env.example root@<nano-ip>:/etc/vela.env
+# edit /etc/vela.env on the board: token, key, FOCUS_CHANNELS, data dir
 
 # buildroot image (SysVinit):
-scp deploy/S99nanoclaw root@<nano-ip>:/etc/init.d/ && ssh root@<nano-ip> \
-  'chmod +x /etc/init.d/S99nanoclaw && /etc/init.d/S99nanoclaw start'
+scp deploy/S99vela root@<nano-ip>:/etc/init.d/ && ssh root@<nano-ip> \
+  'chmod +x /etc/init.d/S99vela && /etc/init.d/S99vela start'
 # systemd image instead:
-scp deploy/nanoclaw.service root@<nano-ip>:/etc/systemd/system/ && \
-  ssh root@<nano-ip> 'systemctl enable --now nanoclaw'
+scp deploy/vela.service root@<nano-ip>:/etc/systemd/system/ && \
+  ssh root@<nano-ip> 'systemctl enable --now vela'
 ```
 
 It also runs anywhere else (`make run`) — the Nano is the destination, not a
@@ -110,7 +111,7 @@ rather than a vending machine — built flat-file-sized for the Nano:
   a real model turn to chime in — short, casual, matching the room. Deciding
   costs nothing (no API call), staying quiet is the default outcome of every
   failure path, and an exponential backoff keeps her from even reconsidering
-  too often. `NANOCLAW_TALK_VALUE` (0–1, default 0.3) scales how chatty; 0
+  too often. `VELA_TALK_VALUE` (0–1, default 0.3) scales how chatty; 0
   turns ambient chiming off entirely. Mentions, DMs, and focus channels
   answer every time, as always.
 - **Human pacing.** Short conversational replies go out as two or three
@@ -129,16 +130,16 @@ rather than a vending machine — built flat-file-sized for the Nano:
   carry use counts, get reinforced when they resurface, decay when ignored,
   and a weighted sample seasons her prompt — so each channel slowly gets its
   own Vela. Voice only, never facts (facts stay in MEMORY.md), and slurs are
-  excluded at the prompt level. `NANOCLAW_LEARNING=off` disables impressions
+  excluded at the prompt level. `VELA_LEARNING=off` disables impressions
   and expression learning together.
 
 ### /dive — the deep loop, on request
 
-Normal turns answer **once** — snappy, texting-speed (`NANOCLAW_PASSES`,
+Normal turns answer **once** — snappy, texting-speed (`VELA_PASSES`,
 default 1). When something deserves more, `/dive` runs the looper protocol:
 state the goal and acceptance criteria, work with a doubled tool budget, then
 **self-review** — the model re-reads its own answer against the criteria and
-repairs it before you see it (`NANOCLAW_DIVE_PASSES`, default 2). The
+repairs it before you see it (`VELA_DIVE_PASSES`, default 2). The
 economics are the point: a cheap model looped twice with a clear goal beats
 one expensive shot, at a fraction of the cost — but the loop is a gear you
 shift into, not the idle she drives around in.
@@ -155,7 +156,7 @@ until it's done and posts the MP4).
 
 Auth is either a **SuperGrok / X Premium+ subscription** — an admin runs
 `/grok login`, opens the link, approves, no API key at all — or a
-pay-as-you-go `XAI_API_KEY` from console.x.ai. `NANOCLAW_IMAGE_USERS`
+pay-as-you-go `XAI_API_KEY` from console.x.ai. `VELA_IMAGE_USERS`
 restricts who can spend; blank opens it to the whole server.
 
 The slash commands are `/dive` (the deep loop), `/request` (open a goal-framed
@@ -180,7 +181,7 @@ gets a `github` tool that talks straight to the GitHub API as her own account �
 and nothing running on the box**. Repositories Vela creates on request are
 always public and forkable; the tool does not accept a private-repository
 option. Because it can't touch the machine, it's open to the whole server by
-default; set `NANOCLAW_REPO_USERS` to a comma-separated Discord-ID list to
+default; set `VELA_REPO_USERS` to a comma-separated Discord-ID list to
 narrow it.
 
 > **@vela** spin up a repo `tcg-price-alerts`, drop in a README and a hello.py
@@ -211,7 +212,7 @@ allow-listed shell below.
 
 ### Code, git & libraries (coder allowlist)
 
-Optional. Add Discord IDs to `NANOCLAW_CODERS` and those users can have Vela
+Optional. Add Discord IDs to `VELA_CODERS` and those users can have Vela
 write code, run it, install libraries, and push to her own GitHub — a shell +
 `write_file`/`read_file` in a persistent workspace, `git` authenticated by
 `GITHUB_TOKEN` (her account).
@@ -245,7 +246,7 @@ send Gemfile or lockfile fragments.
 and OAuth previews require their corresponding host-side test credentials and
 runtime connectivity. Production credentials belong on the self-hoster's
 machine and are never committed or requested in Discord.
-Set `NANOCLAW_RAILS_TEMPLATE=owner/private-template` to enable the GitHub
+Set `VELA_RAILS_TEMPLATE=owner/private-template` to enable the GitHub
 tool's `create_rails_app` action. The foundation repository remains private,
 but every resulting app repository is public so people can fork it and deploy
 it on their own servers. Generated repositories must contain placeholders and
@@ -254,7 +255,7 @@ setup instructions, never Vela's deployment credentials.
 > **@vela** clone my repo, add a /health endpoint, run the tests, commit and push
 
 **This is root-level trust.** A shell can read the process environment and any
-secret the bot holds, so `NANOCLAW_CODERS` members are effectively box admins —
+secret the bot holds, so `VELA_CODERS` members are effectively box admins —
 add only people you'd give the whole machine to. Blank allowlist = the
 capability is entirely off; non-coders are refused in code.
 `write_file`/`read_file` are confined to the workspace (no `..` escape);
@@ -272,7 +273,7 @@ safety bound.
 **⚠️ Deploy sequencing — do this before enabling coders in production.** A
 coder shell can read `GITHUB_TOKEN` from the environment and push whatever it
 likes; only the **signed-tag deploy gate** makes such a push inert (the Nano
-runs only binaries you signed). So: **do not set `NANOCLAW_CODERS` in
+runs only binaries you signed). So: **do not set `VELA_CODERS` in
 production until signed-tag verification is live on the box.** And scope the
 token to blast radius — a **fine-grained PAT limited to Vela's own repos,
 contents + pull-request write only, no admin**, treated as rotatable. Then a
@@ -328,7 +329,7 @@ content-types only) and posts it.
 
 ### Reading images (vision)
 
-Attach a picture and Vela can *see* it. When `NANOCLAW_VISION_MODEL` is set (a
+Attach a picture and Vela can *see* it. When `VELA_VISION_MODEL` is set (a
 multimodal model on your endpoint — default `stepfun/step-3.7-flash`), any
 image on a message is read by the vision model first and folded into the turn,
 so the normal tool loop can act on it.
@@ -338,7 +339,7 @@ so the normal tool loop can act on it.
 
 The image bytes are fetched SSRF-guarded (≤5MB, image types only) and inlined
 to the model; whatever text is *in* the picture is treated as data, never as an
-instruction. Blank `NANOCLAW_VISION_MODEL` turns image reading off.
+instruction. Blank `VELA_VISION_MODEL` turns image reading off.
 
 ### Mentions — quick turns
 
@@ -359,7 +360,7 @@ open it in any browser.
 
 ```bash
 make test    # go vet + the offline test suite (agent loop runs against a stub)
-make run     # local run with ./nanoclaw.env
+make run     # local run with ./vela.env
 ```
 
 MIT.

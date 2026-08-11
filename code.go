@@ -13,11 +13,11 @@ import (
 // Code capability: a shell + file tools so Vela can write code, install
 // libraries, and push to her own GitHub. HIGH TRUST — a shell can read
 // everything the process can (env, secrets), so it's gated to an explicit
-// coder allowlist (NANOCLAW_CODERS). Empty allowlist = the capability is off.
+// coder allowlist (VELA_CODERS). Empty allowlist = the capability is off.
 
 func (tc *ToolCtx) isCoder() bool { return tc.cfg.Coders[tc.authorID] }
 
-const coderOnly = "REFUSED: running code/shell is limited to the coder allowlist (NANOCLAW_CODERS). " +
+const coderOnly = "REFUSED: running code/shell is limited to the coder allowlist (VELA_CODERS). " +
 	"Tell this user they're not authorized to run commands on the box."
 
 // codeGate is the single authorization point for all code tools: the coder
@@ -119,7 +119,7 @@ func (tc *ToolCtx) readWorkspaceFile(path string) string {
 // data dir) and never touches the operator's ~/.gitconfig: it points
 // GIT_CONFIG_GLOBAL at the bot's own file and exports that into this process,
 // so every `git` the shell tool runs inherits it. No-op when GITHUB_TOKEN is
-// unset. This matters when nanoclaw runs as a normal user (a dev box / the
+// unset. This matters when Vela runs as a normal user (a dev box / the
 // Mini bench): without it, `git config --global` would hijack that user's
 // identity and credentials.
 func SetupGit(cfg *Config) {

@@ -185,7 +185,9 @@ func TestRailsIsAFirstClassBuildTarget(t *testing.T) {
 		"run verify_repo",
 		"deploy that exact commit",
 		"replace every template-facing identity",
-		"Never ship Railsfastbase placeholder branding",
+		"Never ship inherited template placeholder branding",
+		"Commerce is guest-first",
+		"local test simulator",
 		"put_file action replaces the ENTIRE target file",
 	} {
 		if !strings.Contains(systemPrompt, want) {
@@ -216,7 +218,7 @@ func TestRailsIsAFirstClassBuildTarget(t *testing.T) {
 func TestSelfIntroductionCoversTheCurrentKitHonestly(t *testing.T) {
 	for _, want := range []string{
 		"named for the Vela pulsar",
-		"MIT-licensed RailsFast foundations",
+		"private Vela Rails production foundation",
 		"Every repo you create on request is public and forkable",
 		"Stripe-ready",
 		"preview payment sandboxes and production credentials are",

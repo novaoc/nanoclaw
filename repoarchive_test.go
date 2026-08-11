@@ -12,7 +12,7 @@ import (
 
 func TestRepoArchiveCanonicalAndSignature(t *testing.T) {
 	p := repoArchiveParams{Action: "verify", Name: "Store", Target: "test", Dockerfile: "Dockerfile", Port: 3000}
-	wantCanonical := "holodeck-archive-v1\nverify\nStore\ntest\nDockerfile\n3000\n"
+	wantCanonical := "holodex-archive-v1\nverify\nStore\ntest\nDockerfile\n3000\n"
 	if got := p.canonical(); got != wantCanonical {
 		t.Fatalf("canonical mismatch:\n%q\nwant:\n%q", got, wantCanonical)
 	}

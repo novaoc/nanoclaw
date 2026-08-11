@@ -77,7 +77,7 @@ func (c *Config) ImageAllowed(uid string) bool {
 }
 
 // CodeEnabled reports whether the shell/file tools may run — gated to an
-// explicit coder allowlist (NANOCLAW_CODERS). A shell is root-level trust on
+// explicit coder allowlist (VELA_CODERS). A shell is root-level trust on
 // the box, so an empty allowlist turns the whole capability off.
 func (c *Config) CodeEnabled() bool {
 	return len(c.Coders) > 0
@@ -88,7 +88,7 @@ type Config struct {
 	DeepseekKey   string
 	DeepseekURL   string // OpenAI-compatible base, default api.deepseek.com
 	Model         string
-	VisionModel   string // NANOCLAW_VISION_MODEL — reads images sent to Discord; "" disables
+	VisionModel   string // VELA_VISION_MODEL — reads images sent to Discord; "" disables
 	DataDir       string
 	FocusChannels map[string]bool // channel IDs answered without a mention
 	MaxToolIters  int
@@ -99,18 +99,18 @@ type Config struct {
 	DivePasses    int    // …and N self-review passes (the looper-model play)
 	BraveKey      string // BRAVE_API_KEY — real search API; falls back to DuckDuckGo scraping
 	// 2.0 group presence + learning
-	TalkValue float64 // NANOCLAW_TALK_VALUE 0-1: chattiness of unprompted chime-ins; 0 = off
-	Learning  bool    // NANOCLAW_LEARNING: expression learning + person impressions
+	TalkValue float64 // VELA_TALK_VALUE 0-1: chattiness of unprompted chime-ins; 0 = off
+	Learning  bool    // VELA_LEARNING: expression learning + person impressions
 
-	SandboxURL    string // NANOCLAW_SANDBOX_URL — holodeck demo host (e.g. https://demo.holode.xyz)
-	SandboxToken  string // NANOCLAW_SANDBOX_TOKEN — holodeck deploy bearer token
-	SandboxSecret string // NANOCLAW_SANDBOX_SECRET — HMAC build secret proving deploys are Vela's own
+	SandboxURL    string // VELA_SANDBOX_URL — Holodex demo host (e.g. https://demo.holode.xyz)
+	SandboxToken  string // VELA_SANDBOX_TOKEN — Holodex deploy bearer token
+	SandboxSecret string // VELA_SANDBOX_SECRET — HMAC build secret proving deploys are Vela's own
 
-	RequestsForum string // NANOCLAW_REQUESTS_FORUM — forum channel /request posts into (name or id)
+	RequestsForum string // VELA_REQUESTS_FORUM — forum channel /request posts into (name or id)
 
 	Coders     map[string]bool // Discord IDs allowed to run shell/code (root-trust)
 	RepoUsers  map[string]bool // Discord IDs allowed the github API tool; empty = everyone
-	Mods       map[string]bool // Discord IDs allowed moderation (NANOCLAW_MODS); empty = off
+	Mods       map[string]bool // Discord IDs allowed moderation (VELA_MODS); empty = off
 	ImageUsers map[string]bool // Discord IDs allowed xAI image/video gen; empty = everyone
 
 	XAIKey        string    // XAI_API_KEY (console.x.ai pay-as-you-go); optional if OAuth is used
@@ -120,17 +120,19 @@ type Config struct {
 	Grok          *GrokAuth // SuperGrok / X Premium+ OAuth (device-code); set in LoadConfig
 	Workspace     string    // where code lives + shell runs
 	GitHubToken   string    // GITHUB_TOKEN — enables authenticated push
-	RailsTemplate string    // NANOCLAW_RAILS_TEMPLATE — private owner/repo used by create_rails_app
+	RailsTemplate string    // VELA_RAILS_TEMPLATE — private owner/repo used by create_rails_app
 	GitName       string    // commit identity (Vela's own account)
 	GitEmail      string
 	Secrets       *SecretStore // ephemeral deploy-key store (never in prompt/history)
 }
 
-// LoadConfig reads /etc/nanoclaw.env then ./nanoclaw.env (later wins),
-// then real environment variables (highest). Simple KEY=VALUE lines.
+// LoadConfig reads /etc/nanoclaw.env, /etc/vela.env, ./nanoclaw.env, then
+// ./vela.env (later wins), then real environment variables (highest).
+// Simple KEY=VALUE lines. VELA_* keys are preferred; the legacy NANOCLAW_*
+// spellings keep working so the board's existing config survives the rename.
 func LoadConfig() (*Config, error) {
 	env := map[string]string{}
-	for _, p := range []string{"/etc/nanoclaw.env", "nanoclaw.env"} {
+	for _, p := range []string{"/etc/nanoclaw.env", "/etc/vela.env", "nanoclaw.env", "vela.env"} {
 		f, err := os.Open(p)
 		if err != nil {
 			continue
@@ -147,11 +149,19 @@ func LoadConfig() (*Config, error) {
 		}
 		f.Close()
 	}
-	get := func(k, def string) string {
+	lookup := func(k string) string {
 		if v := os.Getenv(k); v != "" {
 			return v
 		}
-		if v := env[k]; v != "" {
+		return env[k]
+	}
+	get := func(k, def string) string {
+		if rest, ok := strings.CutPrefix(k, "NANOCLAW_"); ok {
+			if v := lookup("VELA_" + rest); v != "" {
+				return v
+			}
+		}
+		if v := lookup(k); v != "" {
 			return v
 		}
 		return def
@@ -213,7 +223,7 @@ func LoadConfig() (*Config, error) {
 			cfg.RepoUsers[id] = true
 		}
 	}
-	for _, id := range strings.Split(get("NANOCLAW_MODS", ""), ",") {
+	for _, id := range strings.Split(get("VELA_MODS", ""), ",") {
 		if id = strings.TrimSpace(id); id != "" {
 			cfg.Mods[id] = true
 		}
@@ -232,10 +242,10 @@ func LoadConfig() (*Config, error) {
 		cfg.FocusChannels[id] = true
 	}
 	if cfg.DiscordToken == "" {
-		return nil, errors.New("DISCORD_TOKEN is required (nanoclaw.env or environment)")
+		return nil, errors.New("DISCORD_TOKEN is required (vela.env, nanoclaw.env, or environment)")
 	}
 	if cfg.DeepseekKey == "" {
-		return nil, errors.New("DEEPSEEK_API_KEY is required (nanoclaw.env or environment)")
+		return nil, errors.New("DEEPSEEK_API_KEY is required (vela.env, nanoclaw.env, or environment)")
 	}
 	return cfg, nil
 }

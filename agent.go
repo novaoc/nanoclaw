@@ -913,17 +913,36 @@ func (a *Agent) toolLoop(ctx context.Context, messages []Msg, tc *ToolCtx, budge
 		}
 		messages = append(messages, *msg)
 		emptyResponses = 0
-		for _, call := range msg.ToolCalls {
+		for i, call := range msg.ToolCalls {
 			log.Printf("tool %s(%.120s)", call.Function.Name, call.Function.Arguments)
 			result := clip(tc.Run(call.Function.Name, call.Function.Arguments), 8000)
 			messages = append(messages, Msg{Role: "tool", ToolCallID: call.ID, Content: result})
 			if tc.boundary != nil {
+				messages = answerUnrunToolCalls(messages, msg.ToolCalls[i+1:])
 				return "", messages, true
 			}
 		}
 	}
 	tc.exhausted = true
 	return "", messages, true
+}
+
+// answerUnrunToolCalls appends a tool result for every call that will not run.
+//
+// A phase boundary stops the tool loop early, but the assistant message still
+// declares all of its tool calls. An OpenAI-shaped API rejects a transcript
+// where a tool_call has no matching tool message, so the next request — the
+// phase checkpoint, which replays this history — fails with a bare 400 and
+// strands the job partway ("couldn't safely cross into the next phase").
+func answerUnrunToolCalls(messages []Msg, unrun []ToolCall) []Msg {
+	for _, call := range unrun {
+		messages = append(messages, Msg{
+			Role:       "tool",
+			ToolCallID: call.ID,
+			Content:    "not run: the previous call ended this phase. Request it again in the next phase if it is still needed.",
+		})
+	}
+	return messages
 }
 
 // phaseCheckpoint removes raw tool traffic before the next web/code lane. The

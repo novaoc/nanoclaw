@@ -71,6 +71,15 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		}
 		tc.usedCode = true
 		return gh.createFromTemplate(tc.cfg.RailsTemplate, a.Name, a.Description)
+	case "publish_app":
+		if a.Repo == "" {
+			return "github error: publish_app needs repo"
+		}
+		if err := gh.requireOwnedRepo(a.Repo); err != nil {
+			return "github error: " + err.Error()
+		}
+		tc.usedCode = true
+		return gh.publishApp(a.Repo, tc.cfg.PublicApps)
 	case "list_tree":
 		if a.Repo == "" {
 			return "github error: list_tree needs repo"
@@ -131,7 +140,7 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		tc.usedCode = true
 		return gh.enablePages(a.Repo)
 	}
-	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|list_tree|read_files|put_file|delete_file|open_pr|fork|enable_pages)"
+	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|publish_app|list_tree|read_files|put_file|delete_file|open_pr|fork|enable_pages)"
 }
 
 type ghClient struct {
@@ -438,9 +447,17 @@ func (g *ghClient) createRepo(name, desc string) string {
 	return fmt.Sprintf("created repo %s", url)
 }
 
-// createFromTemplate creates a public, forkable repository from Vela's private
-// Rails foundation. The configured template name stays out of the model prompt
-// and result; callers only need to choose the new application's name.
+// createFromTemplate creates a repository from Vela's private Rails
+// foundation. The configured template name stays out of the model prompt and
+// result; callers only need to choose the new application's name.
+//
+// Generated applications are PRIVATE at creation, always. GitHub's generate
+// endpoint copies the template's contents verbatim, so a repository made
+// public at this moment would expose the foundation tree before the app has
+// been given its own identity — and, while the foundation itself is not yet
+// cleared for release, would publish foundation code outright. Publication is
+// a separate, deliberate step: publish_app, which refuses unless the operator
+// has enabled it with VELA_PUBLIC_APPS=1.
 func (g *ghClient) createFromTemplate(template, name, desc string) string {
 	owner, repo, err := g.resolveRepo(template)
 	if err != nil {
@@ -452,7 +469,7 @@ func (g *ghClient) createFromTemplate(template, name, desc string) string {
 	}
 	m, st, err := g.do("POST", fmt.Sprintf("/repos/%s/%s/generate", owner, repo), map[string]any{
 		"owner": destinationOwner, "name": name, "description": desc,
-		"private": false, "include_all_branches": false,
+		"private": true, "include_all_branches": false,
 	})
 	if err != nil {
 		return "github error: " + err.Error()
@@ -461,7 +478,32 @@ func (g *ghClient) createFromTemplate(template, name, desc string) string {
 		return "couldn't create Rails app — " + ghErr(m, st)
 	}
 	u, _ := m["html_url"].(string)
-	return fmt.Sprintf("created public Rails app %s from Vela's production foundation — anyone can fork and self-host it", u)
+	return fmt.Sprintf("created Rails app %s from Vela's production foundation (private for now). Give it its own identity, verify it, then use publish_app to make it public and forkable.", u)
+}
+
+// publishApp makes a generated application public once it carries its own
+// identity. It is refused unless the operator has turned publication on, so a
+// containment period — such as an unreleased foundation — cannot be ended by
+// the model on its own.
+func (g *ghClient) publishApp(repoFull string, enabled bool) string {
+	if !enabled {
+		return "publishing is turned off on this instance (VELA_PUBLIC_APPS is not 1), so the app stays private. Tell the requester it's ready and that the operator can publish it."
+	}
+	owner, repo, err := g.resolveRepo(repoFull)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	m, st, err := g.do("PATCH", fmt.Sprintf("/repos/%s/%s", owner, repo), map[string]any{
+		"private": false,
+	})
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	if st >= 400 {
+		return "couldn't publish the app — " + ghErr(m, st)
+	}
+	u, _ := m["html_url"].(string)
+	return fmt.Sprintf("published %s — it's public and forkable now", u)
 }
 
 func (g *ghClient) fork(repoFull string) string {

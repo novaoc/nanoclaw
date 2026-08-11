@@ -127,7 +127,8 @@ func toolDefs(cfg *Config) []ToolDef {
 	if cfg.GithubEnabled() { // API only — no shell; gated by VELA_REPO_USERS (empty = everyone)
 		defs = append(defs, mk("github",
 			"Create and populate GitHub repos and open pull requests via the API, as Vela's own account. This is API-ONLY — nothing runs on the box. Actions: "+
-				"create_rails_app {name, description?} — REQUIRED FIRST ACTION for every site/tool/app; creates an ALWAYS-PUBLIC Ruby on Rails app from Vela's configured production framework so others can fork and self-host it; "+
+				"create_rails_app {name, description?} — REQUIRED FIRST ACTION for every site/tool/app; creates a Ruby on Rails app from Vela's configured production framework. The new repo starts PRIVATE and holds the framework's placeholder identity; "+
+				"publish_app {repo} — makes a finished app public and forkable. Only after it carries the requested product's own identity and has passed verify_repo. Refused when the operator has publication turned off, which is normal; say so plainly rather than retrying; "+
 				"create_repo {name, description?} — legacy/non-app repository action; refused when the Rails framework is configured; "+
 				"list_tree {repo, ref?, path?} — inspect Vela's own repository in one call; optional path filters by prefix; "+
 				"read_files {repo, paths:[up to 3 paths], ref?} — read focused files from Vela's own repository; use this instead of shell/curl and read only files you will change; "+
@@ -138,7 +139,7 @@ func toolDefs(cfg *Config) []ToolDef {
 				"enable_pages {repo} — legacy static publishing, never completion for an app request. "+
 				"TO DEPLOY AN APP: create_rails_app → focused put_file changes → verify_repo → deploy_repo. Never substitute standalone HTML, Node, Python, Go, or PHP. "+
 				"To PR into someone else's repo: fork it, put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
-			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|list_tree|read_files|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
+			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|publish_app|list_tree|read_files|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
 	if cfg.SandboxURL != "" && cfg.SandboxToken != "" && cfg.SandboxSecret != "" { // Holodex demo hosting
 		defs = append(defs, mk("deploy_demo",

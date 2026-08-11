@@ -121,6 +121,7 @@ type Config struct {
 	Workspace     string    // where code lives + shell runs
 	GitHubToken   string    // GITHUB_TOKEN — enables authenticated push
 	RailsTemplate string    // VELA_RAILS_TEMPLATE — private owner/repo used by create_rails_app
+	PublicApps    bool      // VELA_PUBLIC_APPS=1 — allow publish_app to make generated apps public
 	GitName       string    // commit identity (Vela's own account)
 	GitEmail      string
 	Secrets       *SecretStore // ephemeral deploy-key store (never in prompt/history)
@@ -201,6 +202,7 @@ func LoadConfig() (*Config, error) {
 		Workspace:     get("NANOCLAW_WORKSPACE", ""),
 		GitHubToken:   get("GITHUB_TOKEN", ""),
 		RailsTemplate: get("NANOCLAW_RAILS_TEMPLATE", ""),
+		PublicApps:    get("NANOCLAW_PUBLIC_APPS", "") == "1",
 		GitName:       get("GIT_NAME", "Vela"),
 		GitEmail:      get("GIT_EMAIL", ""),
 		RequestsForum: get("NANOCLAW_REQUESTS_FORUM", "requests"),

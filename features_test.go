@@ -123,3 +123,27 @@ func TestModerationGatedWithoutMods(t *testing.T) {
 		t.Errorf("expected unavailable, got %q", out)
 	}
 }
+
+// Generated applications must never be born public: GitHub's generate endpoint
+// copies the foundation verbatim, so publication is a separate step that the
+// operator controls. With publication off, publish_app must refuse BEFORE any
+// API call — a network attempt here would mean the gate leaks.
+func TestPublishAppRefusedWhenPublicationDisabled(t *testing.T) {
+	g := &ghClient{token: "unusable-token"}
+	out := g.publishApp("Velaoc/some-app", false)
+	if !strings.Contains(out, "publishing is turned off") {
+		t.Fatalf("disabled publication must refuse locally, got %q", out)
+	}
+	if strings.Contains(out, "github error") {
+		t.Fatalf("gate must short-circuit before contacting GitHub, got %q", out)
+	}
+}
+
+// The containment default matters more than the flag: an instance that never
+// sets the variable must not publish.
+func TestPublicAppsDefaultsOff(t *testing.T) {
+	cfg := testCfg(t)
+	if cfg.PublicApps {
+		t.Fatal("generated applications must default to private on a fresh instance")
+	}
+}

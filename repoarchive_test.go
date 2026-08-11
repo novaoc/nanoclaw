@@ -66,7 +66,7 @@ func TestRepoBuildToolsAreCoderOnlyAndConfigured(t *testing.T) {
 	}
 }
 
-func TestRailsTemplateActionCreatesPublicAppsWithoutExposingTemplate(t *testing.T) {
+func TestRailsTemplateActionCreatesPublishableAppsWithoutExposingTemplate(t *testing.T) {
 	cfg := testCfg(t)
 	cfg.GitHubToken = "github-token"
 	cfg.RailsTemplate = "private-owner/private-foundation"
@@ -77,8 +77,13 @@ func TestRailsTemplateActionCreatesPublicAppsWithoutExposingTemplate(t *testing.
 			description = d.Function.Description
 		}
 	}
-	if !strings.Contains(description, "create_rails_app") || !strings.Contains(description, "REQUIRED FIRST ACTION") || !strings.Contains(description, "ALWAYS-PUBLIC") {
-		t.Fatal("GitHub tool does not enforce the public Rails application path")
+	// Applications are generated private and become public only through the
+	// operator-gated publish step, so the model must be told both halves.
+	if !strings.Contains(description, "create_rails_app") || !strings.Contains(description, "REQUIRED FIRST ACTION") || !strings.Contains(description, "PRIVATE") {
+		t.Fatal("GitHub tool does not enforce the Rails application path")
+	}
+	if !strings.Contains(description, "publish_app") || !strings.Contains(description, "public and forkable") {
+		t.Fatal("GitHub tool does not describe the gated publication step")
 	}
 	if !strings.Contains(description, "REPLACES THE ENTIRE FILE") || !strings.Contains(description, "delete_file") {
 		t.Fatal("GitHub tool does not explain safe full-file writes and deletion")

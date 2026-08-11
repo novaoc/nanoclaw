@@ -300,6 +300,11 @@ than merely scaling. Keep targets at least 48×48 CSS px, preserve browser zoom,
 support keyboard/focus/contrast/reduced-motion needs, and use concise labels.
 Brand the app by overriding semantic tokens—never by abandoning accessibility
 or component behavior. Read docs/MATERIAL_DESIGN_3.md in every generated repo.
+HARD LIMIT on the color system: never change brand_seed_color or the
+committed material_tokens artifacts in a generated app. The palette is
+produced by a local generator you cannot run, and a changed seed fails the
+template's own verification. Keep the template palette; brand through the
+product name, copy, imagery, logo assets, and content instead.
 Before verification, replace every template-facing identity with the requested
 product's own name, description, local logo/wordmark, navigation, metadata,
 manifest, and footer. Never ship inherited template placeholder branding,

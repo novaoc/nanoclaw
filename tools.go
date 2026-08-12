@@ -189,7 +189,8 @@ func toolDefs(cfg *Config) []ToolDef {
 				"create_repo {name, description?} — legacy/non-app repository action; refused when the Rails framework is configured; "+
 				"search_code {repo, pattern, path?, glob?, ref?} — regex search over the remote repo (works on brand-new repos). Returns path:line: text like workspace search_code. SEARCH BEFORE read_files; narrow with path/glob; "+
 				"list_tree {repo, ref?, path?} — list paths only when you need structure, not contents; "+
-				"read_files {repo, paths:[up to 3], ref?, start_line?, end_line?} — read files you will edit (not symbol hunt; use search_code). Optional 1-based line range; omit for whole file. Large files return a window plus the exact next-range call — never fetch_url/shell for repo files; "+
+				"describe_schema {repo, tables?:[names], ref?} — compact table/column/index/FK view parsed from db/schema.rb. Omit tables to list names only. USE THIS instead of read_files on db/schema.rb — reading the whole schema is wasteful and truncates; "+
+				"read_files {repo, paths:[up to 3], ref?, start_line?, end_line?} — read files you will edit (not symbol hunt; use search_code). Optional 1-based line range; omit for whole file. Large files return a window plus the exact next-range call — never fetch_url/shell for repo files. Do not use for db/schema.rb (use describe_schema); "+
 				"patch_file {repo, path, ops, message?, branch?} — targeted edits (same ops as apply_patch: replace|insert_after|insert_before|delete; each find must match exactly once or nothing is committed). Prefer for small edits; "+
 				"NEVER write db/schema.rb, db/structure.sql, or a lockfile — they are generated; add a migration under db/migrate/ or change the Gemfile instead; "+
 				"put_file {repo, path, content, message?, branch?} — REPLACES THE ENTIRE FILE and commits (new files or full rewrites only; repo is 'name' or 'owner/name'); "+
@@ -199,7 +200,7 @@ func toolDefs(cfg *Config) []ToolDef {
 				"enable_pages {repo} — legacy static publishing, never completion for an app request. "+
 				"TO DEPLOY AN APP: app_spec → create_rails_app (auto-shapes identity/README/modules) → focused edits → verify_repo → deploy_repo. Never substitute standalone HTML, Node, Python, Go, or PHP. "+
 				"To PR into someone else's repo: fork it, patch_file/put_file onto a new branch in the fork, then open_pr on the upstream with head 'velaoc:branch'.",
-			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|shape|publish_app|search_code|list_tree|read_files|patch_file|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"pattern":{"type":"string"},"glob":{"type":"string"},"start_line":{"type":"integer","description":"read_files: optional 1-based start line"},"end_line":{"type":"integer","description":"read_files: optional 1-based end line (inclusive)"},"ops":{"type":"array","items":{"type":"object","properties":{"op":{"type":"string"},"find":{"type":"string"},"replace":{"type":"string"},"text":{"type":"string"}},"required":["op","find"]}},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
+			`{"type":"object","properties":{"action":{"type":"string","description":"create_repo|create_rails_app|shape|publish_app|search_code|list_tree|read_files|describe_schema|patch_file|put_file|delete_file|open_pr|fork|enable_pages"},"name":{"type":"string"},"description":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":3},"tables":{"type":"array","items":{"type":"string"},"description":"describe_schema: table names; omit to list all names"},"content":{"type":"string"},"message":{"type":"string"},"branch":{"type":"string"},"ref":{"type":"string"},"pattern":{"type":"string"},"glob":{"type":"string"},"start_line":{"type":"integer","description":"read_files: optional 1-based start line"},"end_line":{"type":"integer","description":"read_files: optional 1-based end line (inclusive)"},"ops":{"type":"array","items":{"type":"object","properties":{"op":{"type":"string"},"find":{"type":"string"},"replace":{"type":"string"},"text":{"type":"string"}},"required":["op","find"]}},"title":{"type":"string"},"head":{"type":"string"},"base":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`))
 	}
 	if cfg.SandboxURL != "" && cfg.SandboxToken != "" && cfg.SandboxSecret != "" { // Holodex demo hosting
 		defs = append(defs, mk("deploy_demo",
@@ -291,6 +292,7 @@ type toolArgs struct {
 	Models     []benchModel
 	Files      []demoFile // deploy_demo: the app's files
 	Paths      []string   // github read_files: focused repository files
+	Tables     []string   `json:"tables"` // github describe_schema: table names
 	Ops        []patchOp  // apply_patch
 	Port       int        // deploy_demo: container app's listen port (optional)
 	StartLine  int        `json:"start_line"` // read_file / read_files: 1-based; 0 = omit

@@ -154,6 +154,21 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		tc.repoReads++
 		tc.usedCode = true
 		return gh.readFiles(a.Repo, a.Ref, a.Paths, a.StartLine, a.EndLine)
+	case "describe_schema":
+		if a.Repo == "" {
+			return "github error: describe_schema needs repo"
+		}
+		if err := gh.requireOwnedRepo(a.Repo); err != nil {
+			return "github error: " + err.Error()
+		}
+		if tc.repoReads >= 12 {
+			return "INSPECTION_COMPLETE: repository read limit reached. You already have enough context; stop inspecting and make the focused patch_file/put_file changes now."
+		}
+		tc.repoReads++
+		tc.usedCode = true
+		tc.ensureGHCache()
+		gh.cache = tc.ghCache
+		return gh.describeSchema(a.Repo, a.Ref, a.Tables)
 	case "patch_file":
 		if a.Repo == "" || a.Path == "" {
 			return "github error: patch_file needs repo and path"
@@ -212,7 +227,7 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		tc.usedCode = true
 		return gh.enablePages(a.Repo)
 	}
-	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|shape|publish_app|search_code|list_tree|read_files|patch_file|put_file|delete_file|open_pr|fork|enable_pages)"
+	return "github error: unknown action " + a.Action + " (use create_repo|create_rails_app|shape|publish_app|search_code|list_tree|read_files|describe_schema|patch_file|put_file|delete_file|open_pr|fork|enable_pages)"
 }
 
 // ghRepoCache holds git trees and blobs for the current tool turn so remote
@@ -439,6 +454,55 @@ func (g *ghClient) listTree(repo, ref, prefix string) string {
 		return "no files found for that repository/prefix"
 	}
 	return fmt.Sprintf("repository tree at %s (%d files shown):\n%s", ref, len(paths), strings.Join(paths, "\n"))
+}
+
+// describeSchema returns a compact table/column/index/FK summary parsed from
+// db/schema.rb at ref, via the turn-scoped tree/blob cache. Empty tables lists
+// names only. Prefer this over read_files on db/schema.rb.
+func (g *ghClient) describeSchema(repo, ref string, tables []string) string {
+	owner, name, err := g.resolveRepo(repo)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	ref, err = g.defaultRef(owner, name, ref)
+	if err != nil {
+		return "github error: " + err.Error()
+	}
+	raw, err := g.fetchRepoSchemaRB(owner, name, ref)
+	if err != nil {
+		return err.Error()
+	}
+	schema, err := parseSchemaRB(string(raw))
+	if err != nil {
+		return err.Error()
+	}
+	return formatSchemaInspect(schema, normalizeTableArgs(tables))
+}
+
+// fetchRepoSchemaRB loads db/schema.rb through cachedTree + cachedBlob.
+func (g *ghClient) fetchRepoSchemaRB(owner, name, ref string) ([]byte, error) {
+	entries, err := g.cachedTree(owner, name, ref)
+	if err != nil {
+		return nil, fmt.Errorf("github error: %s", err.Error())
+	}
+	var sha string
+	for _, e := range entries {
+		if e.Path == "db/schema.rb" {
+			sha = e.SHA
+			break
+		}
+	}
+	if sha == "" {
+		return nil, fmt.Errorf("db/schema.rb is missing from this repository")
+	}
+	raw, err := g.cachedBlob(owner, name, sha)
+	if err != nil {
+		return nil, fmt.Errorf("db/schema.rb could not be read: %s", err.Error())
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, fmt.Errorf("db/schema.rb is empty")
+	}
+	return raw, nil
 }
 
 func (g *ghClient) readFiles(repo, ref string, paths []string, startLine, endLine int) string {

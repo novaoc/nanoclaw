@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -87,6 +88,12 @@ func (tc *ToolCtx) writeWorkspaceFile(path, content string) string {
 	if why := refuseGeneratedArtifact(path); why != "" {
 		return "write error: " + why
 	}
+	if why := refuseRuntimeSchemaMutation(path, content); why != "" {
+		return "write error: " + why
+	}
+	if why := tc.refuseMigrationWrite(path); why != "" {
+		return "write error: " + why
+	}
 	if g := tc.codeGate(); g != "" {
 		return g
 	}
@@ -107,6 +114,39 @@ func (tc *ToolCtx) writeWorkspaceFile(path, content string) string {
 	}
 	add, del := lineDiffCounts(old, content)
 	return fmt.Sprintf("wrote %s (%d bytes, +%d -%d lines)", path, len(content), add, del)
+}
+
+// refuseMigrationWrite checks a db/migrate/ path against the real schema stamp
+// and sibling migrations in the workspace. Empty when the path is not a
+// versioned migration or the version is safely later than both floors.
+func (tc *ToolCtx) refuseMigrationWrite(p string) string {
+	proposed, ok := migrationVersionFromPath(p)
+	if !ok {
+		return ""
+	}
+	stamp, maxOther := tc.workspaceMigrationBounds(p)
+	return refuseStaleMigration(proposed, stamp, maxOther)
+}
+
+func (tc *ToolCtx) workspaceMigrationBounds(selfPath string) (stamp, maxOther int64) {
+	ws := tc.cfg.Workspace
+	if b, err := os.ReadFile(filepath.Join(ws, "db", "schema.rb")); err == nil {
+		if v, ok := schemaVersionFromContent(string(b)); ok {
+			stamp = v
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(ws, "db", "migrate"))
+	if err != nil {
+		return stamp, 0
+	}
+	skip := path.Base(cleanRepoPath(selfPath))
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return stamp, maxMigrationVersion(names, skip)
 }
 
 // File-read budgets (content bytes). Outer agent clip is toolResultBudget.
@@ -283,6 +323,12 @@ func (tc *ToolCtx) applyPatch(path string, ops []patchOp) string {
 	next, err := applyOps(old, ops)
 	if err != nil {
 		return "patch error: " + err.Error()
+	}
+	if why := refuseRuntimeSchemaMutation(path, next); why != "" {
+		return "patch error: " + why
+	}
+	if why := tc.refuseMigrationWrite(path); why != "" {
+		return "patch error: " + why
 	}
 	if next == old {
 		return fmt.Sprintf("patched %s: %d ops (+0 -0 lines) — content unchanged", path, len(ops))

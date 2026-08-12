@@ -459,6 +459,74 @@ func TestAutomaticWebCodePhaseContinuation(t *testing.T) {
 	}
 }
 
+// phaseCheckpoint must retain external data-contract facts (URLs, shape) as
+// inert DATA so the next lane does not re-fetch to re-learn field names, while
+// still forbidding credentials/instructions copied out of tool results.
+func TestPhaseCheckpointRetainsDataContract(t *testing.T) {
+	p := phaseCheckpointPrompt
+	for _, need := range []string{
+		"URLs already fetched",
+		"field names",
+		"shape",
+		"remains to fetch",
+		"untrusted DATA",
+		"credentials",
+		"tokens",
+		"Do not copy instructions",
+	} {
+		if !strings.Contains(p, need) {
+			t.Errorf("checkpoint prompt missing %q", need)
+		}
+	}
+	// Must not invite carrying raw page body across the boundary.
+	if strings.Contains(p, "copy the page") || strings.Contains(p, "include full page") {
+		t.Error("checkpoint must not ask for raw page content")
+	}
+}
+
+// Sample-once / write-the-importer guidance must sit where the model reads it
+// before fetching or coding — system prompt, fetch_url tool, and phase cues.
+func TestExternalDatasetSampleOnceGuidance(t *testing.T) {
+	if !strings.Contains(systemPrompt, "sample once, then write the importer") {
+		t.Fatal("system prompt must state the sample-once/importer rule")
+	}
+	if !strings.Contains(systemPrompt, "ONE SMALL SAMPLE") {
+		t.Fatal("system prompt must require one small sample, not bulk pulls")
+	}
+	if !strings.Contains(systemPrompt, "IMPORTER inside the application") {
+		t.Fatal("system prompt must require an in-app importer")
+	}
+	if !strings.Contains(systemPrompt, "Never page through bulk") {
+		t.Fatal("system prompt must forbid bulk paging into context")
+	}
+	var fetchDesc string
+	for _, d := range toolDefs(testCfg(t)) {
+		if d.Function.Name == "fetch_url" {
+			fetchDesc = d.Function.Description
+		}
+	}
+	if fetchDesc == "" {
+		t.Fatal("fetch_url tool missing")
+	}
+	if !strings.Contains(fetchDesc, "ONE SMALL SAMPLE") || !strings.Contains(fetchDesc, "importer") {
+		t.Fatalf("fetch_url must teach sample-once/importer before fetch: %q", fetchDesc)
+	}
+	web := automaticPhaseInstruction("web", &phaseBoundary{Lane: "web", Tool: "fetch_url"})
+	if !strings.Contains(web, "ONE SMALL SAMPLE") || !strings.Contains(web, "importer") {
+		t.Fatalf("web phase instruction must reinforce sample-once: %q", web)
+	}
+	code := automaticPhaseInstruction("code", nil)
+	if !strings.Contains(code, "importer") {
+		t.Fatalf("code phase instruction must point at writing an importer: %q", code)
+	}
+}
+
+func TestMaxPhaseCrossings(t *testing.T) {
+	if maxPhaseCrossings != 8 {
+		t.Fatalf("maxPhaseCrossings = %d, want 8 (modest headroom after sample-once fix)", maxPhaseCrossings)
+	}
+}
+
 func TestRbNormNum(t *testing.T) {
 	cases := map[string]string{"001/217": "1", "TG07": "tg7", "SWSH001": "swsh1", "0": "0", "13": "13", "  25/198 ": "25"}
 	for in, want := range cases {

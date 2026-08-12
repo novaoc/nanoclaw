@@ -112,7 +112,7 @@ func toolDefs(cfg *Config) []ToolDef {
 			"Search the web (DuckDuckGo). Use for benchmarks, model releases, docs, news. Returns titles, URLs, snippets.",
 			`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`),
 		mk("fetch_url",
-			"Fetch a web page and return its readable text (truncated). Use after web_search to read a source.",
+			"Fetch a web page and return its readable text (truncated). Use after web_search to read a source. For external datasets/catalogs the app will load: fetch ONE SMALL SAMPLE only (schema or a single page/record) to learn field names and shape, then write an in-app importer — never page bulk rows into your context.",
 			`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),
 		mk("save_artifact",
 			"Save a file the user gets as a Discord attachment. Use for HTML mockups (self-contained, inline CSS/JS), code files, markdown docs, diagrams. name must include an extension.",

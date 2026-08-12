@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -172,6 +173,9 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 			return "github error: put_file needs repo and path"
 		}
 		if why := refuseGeneratedArtifact(a.Path); why != "" {
+			return "github error: " + why
+		}
+		if why := refuseRuntimeSchemaMutation(a.Path, a.Content); why != "" {
 			return "github error: " + why
 		}
 		tc.usedCode = true
@@ -657,6 +661,12 @@ func (g *ghClient) patchFile(repo, path string, ops []patchOp, message, branch s
 	if err != nil {
 		return "patch error: " + err.Error()
 	}
+	if why := refuseRuntimeSchemaMutation(path, next); why != "" {
+		return "patch error: " + why
+	}
+	if why := g.refuseMigrationWrite(owner, name, branch, path); why != "" {
+		return "patch error: " + why
+	}
 	if next == old {
 		return fmt.Sprintf("patched %s: %d ops (+0 -0 lines) — content unchanged", path, len(ops))
 	}
@@ -903,6 +913,49 @@ func (g *ghClient) ensureBranch(owner, repo, branch string) error {
 	return nil
 }
 
+// refuseMigrationWrite reads the real schema stamp and db/migrate/ siblings
+// from the remote repo and refuses a stale migration timestamp.
+func (g *ghClient) refuseMigrationWrite(owner, name, branch, filePath string) string {
+	proposed, ok := migrationVersionFromPath(filePath)
+	if !ok {
+		return ""
+	}
+	ref, err := g.defaultRef(owner, name, branch)
+	if err != nil {
+		// Cannot read bounds — fail open only for non-migration paths (already
+		// filtered); for migrations, treat missing bounds as floor 0 so a
+		// well-formed later timestamp still lands.
+		return refuseStaleMigration(proposed, 0, 0)
+	}
+	stamp, maxOther := g.remoteMigrationBounds(owner, name, ref, filePath)
+	return refuseStaleMigration(proposed, stamp, maxOther)
+}
+
+func (g *ghClient) remoteMigrationBounds(owner, name, ref, selfPath string) (stamp, maxOther int64) {
+	q := "?ref=" + url.QueryEscape(ref)
+	if m, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s/contents/%s%s", owner, name, ghEsc("db/schema.rb"), q), nil); err == nil && st == 200 {
+		if encoded, _ := m["content"].(string); encoded != "" {
+			if raw, decErr := base64.StdEncoding.DecodeString(strings.ReplaceAll(encoded, "\n", "")); decErr == nil {
+				if v, ok := schemaVersionFromContent(string(raw)); ok {
+					stamp = v
+				}
+			}
+		}
+	}
+	entries, err := g.cachedTree(owner, name, ref)
+	if err != nil {
+		return stamp, 0
+	}
+	skip := path.Base(cleanRepoPath(selfPath))
+	var names []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Path, "db/migrate/") && strings.HasSuffix(e.Path, ".rb") {
+			names = append(names, path.Base(e.Path))
+		}
+	}
+	return stamp, maxMigrationVersion(names, skip)
+}
+
 // putFile creates or updates a file (a commit) in one of Vela's repos. repo may
 // be "name" (her own) or "owner/name". branch is optional (default branch);
 // a missing branch is created so this composes with openPR.
@@ -914,6 +967,9 @@ func (g *ghClient) putFile(repo, path, content, message, branch string) string {
 	if strings.Contains(repo, "/") {
 		parts := strings.SplitN(repo, "/", 2)
 		owner, repo = parts[0], parts[1]
+	}
+	if why := g.refuseMigrationWrite(owner, repo, branch, path); why != "" {
+		return "github error: " + why
 	}
 	if err := g.ensureBranch(owner, repo, branch); err != nil {
 		return "couldn't prepare branch: " + err.Error()

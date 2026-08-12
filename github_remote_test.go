@@ -495,3 +495,69 @@ func TestGithubReadFilesRangedAndPerFileBudget(t *testing.T) {
 		t.Fatalf("OOR must not be empty body: %s", out)
 	}
 }
+
+func TestRemotePutFileMigrationAndSchemaGuards(t *testing.T) {
+	schema := "ActiveRecord::Schema[8.1].define(version: 2026_08_11_140000) do\nend\n"
+	var putCount atomic.Int32
+	e := newGHTestEnv(t, func(w http.ResponseWriter, r *http.Request, e *ghTestEnv) {
+		switch {
+		case r.URL.Path == "/user":
+			writeJSON(w, 200, map[string]any{"login": "velaoc"})
+		case r.URL.Path == "/repos/velaoc/demo":
+			writeJSON(w, 200, map[string]any{"default_branch": "main"})
+		case strings.HasPrefix(r.URL.Path, "/repos/velaoc/demo/git/trees/"):
+			writeJSON(w, 200, map[string]any{
+				"tree": []any{
+					map[string]any{"path": "db/schema.rb", "type": "blob", "sha": "sch", "size": float64(len(schema))},
+					map[string]any{"path": "db/migrate/20260811120000_init.rb", "type": "blob", "sha": "m1", "size": float64(20)},
+				},
+			})
+		case strings.Contains(r.URL.Path, "/contents/db/schema.rb") && r.Method == http.MethodGet:
+			writeJSON(w, 200, map[string]any{"sha": "sch", "content": b64(schema), "encoding": "base64"})
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/contents/"):
+			putCount.Add(1)
+			writeJSON(w, 200, map[string]any{
+				"content": map[string]any{"html_url": "https://github.com/velaoc/demo/blob/main/x"},
+			})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/contents/"):
+			writeJSON(w, 404, map[string]any{"message": "Not Found"})
+		default:
+			writeJSON(w, 404, map[string]any{"message": "unexpected " + r.Method + " " + r.URL.Path})
+		}
+	})
+
+	// Stale migration refused before any PUT; message names minimum.
+	out := e.g.putFile("velaoc/demo",
+		"db/migrate/20260811130000_add_coffee_fields_to_storefront_products.rb",
+		"class AddCoffee < ActiveRecord::Migration[8.1]\n  def change\n    add_column :storefront_products, :roast_level, :string\n  end\nend\n",
+		"add coffee", "")
+	if !strings.Contains(out, "github error:") || !strings.Contains(out, "20260811140001") {
+		t.Fatalf("stale remote migration: %s", out)
+	}
+	if putCount.Load() != 0 {
+		t.Fatalf("refused migration must not PUT, puts=%d", putCount.Load())
+	}
+
+	// Later timestamp accepted.
+	out = e.g.putFile("velaoc/demo",
+		"db/migrate/20260811150000_add_roast_level.rb",
+		"class AddRoast < ActiveRecord::Migration[8.1]\n  def change\n    add_column :storefront_products, :roast_level, :string\n  end\nend\n",
+		"add roast", "")
+	if !strings.Contains(out, "committed") {
+		t.Fatalf("valid remote migration: %s", out)
+	}
+
+	// Runtime DDL outside migrate refused at dispatch (no API needed for content check).
+	cfg := testCfg(t)
+	cfg.GitHubToken = "t"
+	tc := &ToolCtx{cfg: cfg, authorID: "u"}
+	out = tc.runGithub(toolArgs{
+		Action:  "put_file",
+		Repo:    "velaoc/demo",
+		Path:    "lib/foundation/demo_seeds.rb",
+		Content: "connection.add_column :storefront_products, :roast_level, :string\n",
+	})
+	if !strings.Contains(out, "github error:") || !strings.Contains(out, "migration") {
+		t.Fatalf("runtime DDL put_file: %s", out)
+	}
+}

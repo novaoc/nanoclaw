@@ -6,18 +6,37 @@
 
 <p align="center"><em>Small star, cheap passes, gap closing, never done — <a href="LOGO.md">the mark</a>.</em></p>
 
-A pocket AI agent that lives on a **LicheeRV Nano** — a RISC-V board smaller
-than a credit card (256 MB RAM, real Linux) with a 128 GB microSD: one ~8 MB
-static Go binary, **Discord** in, **DeepSeek** agent loop inside, tools +
-memory on the SD card. Plug into USB power and it serves your whole server,
-24/7.
+**An agent harness in one ~8 MB static Go binary** — the tool-calling loop,
+the tool belt, the safety rails, and persistent memory, with no runtime
+dependencies. The model is a swappable backend (anything speaking the
+OpenAI chat API) and Discord is the front end it ships with.
+
+It runs anywhere Go cross-compiles. The reference deployment is a **LicheeRV
+Nano**: a RISC-V board smaller than a credit card, 256 MB of RAM, real Linux,
+a 128 GB microSD, powered from a USB port — serving a whole Discord server on
+about two watts.
 
 Focused on **AI development and agentic engineering**: ask it in Discord to
 build and publish a website or application, pressure-test a project idea, dig
 up benchmarks for a model release, generate media, review an agent design, or
 open a goal-framed request for the community. It searches and reads sources,
-creates public forkable repositories, deploys throwaway live demos, and
-remembers your server's projects across reboots.
+creates public forkable repositories, and remembers your server's projects
+across reboots.
+
+### The harness, and what plugs into it
+
+Vela is useful with nothing attached. Three optional plugins turn "an agent
+that talks" into "an agent that ships", and each can be absent:
+
+| Plugin | Enable with | Without it |
+|---|---|---|
+| **Rails foundation** | `VELA_RAILS_TEMPLATE`, `VELA_FOUNDATION_ROOT` | no house stack to fork; the GitHub API tools still work |
+| **[Holodex](https://github.com/novaoc/holodex)** deploy target | `VELA_SANDBOX_URL` / `_TOKEN` / `_SECRET` | builds end at a public repo with passing tests — no live demo |
+| **Build worker** | `VELA_WORKER_URL` / `_TOKEN` | builds run inline on the board and occupy the turn |
+
+`/request` adapts to what is configured: with a Holodex target "done" means a
+public repo *and* a live demo link; without one Vela says so up front and
+delivers the repository. She will not promise a demo she cannot deliver.
 
 Vela is the product and repository name. New installs use the `VELA_*`
 configuration prefix; existing 2.x installations keep working because the
@@ -41,6 +60,7 @@ Discord message ──► gateway (discordgo) ──► agent loop (DeepSeek too
                                             │  github       (create repo / PR — API, no shell)
                                             │  deploy_demo  (static/container live demo)
                                             │  verify_repo / deploy_repo (heavy verified builds)
+                                            │  enqueue_build (hand a build to the worker, keep talking)
                                             │  shell/write/read_file  (coder allowlist)
                                             │  save_artifact(HTML/code → attachment)
                                             │  remember     (MEMORY.md on SD)
@@ -96,6 +116,23 @@ scp deploy/vela.service root@<nano-ip>:/etc/systemd/system/ && \
 
 It also runs anywhere else (`make run`) — the Nano is the destination, not a
 requirement, so you can dev on a laptop with the same env file.
+
+### 5. Optional: somewhere to build and somewhere to deploy
+
+Skip this entirely and you still have a working agent. Add either piece when
+you want her to ship applications:
+
+- **[Holodex](https://github.com/novaoc/holodex)** — a deploy target for
+  verified builds. Set `VELA_SANDBOX_URL`, `VELA_SANDBOX_TOKEN`, and
+  `VELA_SANDBOX_SECRET` (the last two matching the server's `HOLODEX_TOKEN`
+  and `HOLODEX_BUILD_SECRET`). Without it, a build ends at a public repository
+  and Vela says so when she proposes the plan.
+- **[The build worker](worker/)** — moves the actual coding and testing onto a
+  real machine so a build stops occupying Vela's turn. Set `VELA_WORKER_URL`
+  and `VELA_WORKER_TOKEN`. Without it, builds run inline on the board: they
+  work, but she is busy until they finish.
+
+Both are independent, and neither is required for anything else in the belt.
 
 ## Using it
 

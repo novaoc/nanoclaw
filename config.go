@@ -51,6 +51,12 @@ func (c *Config) VisionEnabled() bool { return c.VisionModel != "" }
 // token). It's separate from the coder shell: no box access, just GitHub API.
 func (c *Config) GithubEnabled() bool { return c.GitHubToken != "" }
 
+// WorkerEnabled reports whether builds can be offloaded to the fat-machine
+// worker (needs its URL, bearer, and the Holodex secret to mint tickets).
+func (c *Config) WorkerEnabled() bool {
+	return c.WorkerURL != "" && c.WorkerToken != "" && c.SandboxSecret != ""
+}
+
 // RepoAllowed gates the github tool. Empty RepoUsers = open to everyone in the
 // server (the private-server default); a non-empty list restricts to those IDs.
 func (c *Config) RepoAllowed(uid string) bool {
@@ -113,19 +119,21 @@ type Config struct {
 	Mods       map[string]bool // Discord IDs allowed moderation (VELA_MODS); empty = off
 	ImageUsers map[string]bool // Discord IDs allowed xAI image/video gen; empty = everyone
 
-	XAIKey        string    // XAI_API_KEY (console.x.ai pay-as-you-go); optional if OAuth is used
-	XAIURL        string    // XAI_API_URL, default https://api.x.ai/v1
-	XAIImageModel string    // XAI_IMAGE_MODEL
-	XAIVideoModel string    // XAI_VIDEO_MODEL
-	Grok          *GrokAuth // SuperGrok / X Premium+ OAuth (device-code); set in LoadConfig
-	Workspace     string    // where code lives + shell runs
-	GitHubToken   string    // GITHUB_TOKEN — enables authenticated push
-	RailsTemplate   string // VELA_RAILS_TEMPLATE — private owner/repo used by create_rails_app
-	FoundationRoot  string // VELA_FOUNDATION_ROOT — local foundation checkout; source of declared modules
-	PublicApps      bool   // VELA_PUBLIC_APPS=1 — allow publish_app to make generated apps public
-	GitName         string // commit identity (Vela's own account)
-	GitEmail        string
-	Secrets         *SecretStore // ephemeral deploy-key store (never in prompt/history)
+	XAIKey         string    // XAI_API_KEY (console.x.ai pay-as-you-go); optional if OAuth is used
+	XAIURL         string    // XAI_API_URL, default https://api.x.ai/v1
+	XAIImageModel  string    // XAI_IMAGE_MODEL
+	XAIVideoModel  string    // XAI_VIDEO_MODEL
+	Grok           *GrokAuth // SuperGrok / X Premium+ OAuth (device-code); set in LoadConfig
+	Workspace      string    // where code lives + shell runs
+	GitHubToken    string    // GITHUB_TOKEN — enables authenticated push
+	RailsTemplate  string    // VELA_RAILS_TEMPLATE — private owner/repo used by create_rails_app
+	FoundationRoot string    // VELA_FOUNDATION_ROOT — local foundation checkout; source of declared modules
+	PublicApps     bool      // VELA_PUBLIC_APPS=1 — allow publish_app to make generated apps public
+	GitName        string    // commit identity (Vela's own account)
+	GitEmail       string
+	Secrets        *SecretStore // ephemeral deploy-key store (never in prompt/history)
+	WorkerURL      string       // VELA_WORKER_URL — offload builds to the fat-machine worker
+	WorkerToken    string       // VELA_WORKER_TOKEN — bearer for the worker API
 }
 
 // LoadConfig reads /etc/nanoclaw.env, /etc/vela.env, ./nanoclaw.env, then
@@ -180,36 +188,38 @@ func LoadConfig() (*Config, error) {
 		MaxToolIters:  clampInt(get("NANOCLAW_MAX_ITERS", ""), 20, 4, 40),
 		// Ordinary-lane size only (builds use a separate capacity-1 lane).
 		// Default 1 keeps the Nano's free RAM safe under concurrent load.
-		Concurrency: clampInt(get("NANOCLAW_CONCURRENCY", ""), 1, 1, 4),
-		HistoryTurns:  24,
+		Concurrency:  clampInt(get("NANOCLAW_CONCURRENCY", ""), 1, 1, 4),
+		HistoryTurns: 24,
 		// Normal turns answer ONCE — looping-by-default made every reply feel
 		// slow on a texting surface. The looper play lives in /dive, which
 		// runs a bigger tool budget + self-review passes on request.
-		Passes:        clampInt(get("NANOCLAW_PASSES", ""), 1, 1, 8),
-		DiveToolIters: 32,
-		DivePasses:    clampInt(get("NANOCLAW_DIVE_PASSES", ""), 2, 1, 8),
-		BraveKey:      get("BRAVE_API_KEY", ""),
-		TalkValue:     clampFloat(get("NANOCLAW_TALK_VALUE", ""), 0.3, 0, 1),
-		Learning:      get("NANOCLAW_LEARNING", "on") != "off",
-		SandboxURL:    strings.TrimRight(get("NANOCLAW_SANDBOX_URL", ""), "/"),
-		SandboxToken:  get("NANOCLAW_SANDBOX_TOKEN", ""),
-		SandboxSecret: get("NANOCLAW_SANDBOX_SECRET", ""),
-		Coders:        map[string]bool{},
-		RepoUsers:     map[string]bool{},
-		Mods:          map[string]bool{},
-		ImageUsers:    map[string]bool{},
-		XAIKey:        get("XAI_API_KEY", ""),
-		XAIURL:        get("XAI_API_URL", "https://api.x.ai/v1"),
-		XAIImageModel: get("XAI_IMAGE_MODEL", "grok-imagine-image-quality"),
-		XAIVideoModel: get("XAI_VIDEO_MODEL", "grok-imagine-video-1.5"),
-		Workspace:     get("NANOCLAW_WORKSPACE", ""),
-		GitHubToken:   get("GITHUB_TOKEN", ""),
+		Passes:         clampInt(get("NANOCLAW_PASSES", ""), 1, 1, 8),
+		DiveToolIters:  32,
+		DivePasses:     clampInt(get("NANOCLAW_DIVE_PASSES", ""), 2, 1, 8),
+		BraveKey:       get("BRAVE_API_KEY", ""),
+		TalkValue:      clampFloat(get("NANOCLAW_TALK_VALUE", ""), 0.3, 0, 1),
+		Learning:       get("NANOCLAW_LEARNING", "on") != "off",
+		SandboxURL:     strings.TrimRight(get("NANOCLAW_SANDBOX_URL", ""), "/"),
+		SandboxToken:   get("NANOCLAW_SANDBOX_TOKEN", ""),
+		SandboxSecret:  get("NANOCLAW_SANDBOX_SECRET", ""),
+		Coders:         map[string]bool{},
+		RepoUsers:      map[string]bool{},
+		Mods:           map[string]bool{},
+		ImageUsers:     map[string]bool{},
+		XAIKey:         get("XAI_API_KEY", ""),
+		XAIURL:         get("XAI_API_URL", "https://api.x.ai/v1"),
+		XAIImageModel:  get("XAI_IMAGE_MODEL", "grok-imagine-image-quality"),
+		XAIVideoModel:  get("XAI_VIDEO_MODEL", "grok-imagine-video-1.5"),
+		Workspace:      get("NANOCLAW_WORKSPACE", ""),
+		GitHubToken:    get("GITHUB_TOKEN", ""),
 		RailsTemplate:  get("NANOCLAW_RAILS_TEMPLATE", ""),
 		FoundationRoot: get("NANOCLAW_FOUNDATION_ROOT", ""),
 		PublicApps:     get("NANOCLAW_PUBLIC_APPS", "") == "1",
 		GitName:        get("GIT_NAME", "Vela"),
 		GitEmail:       get("GIT_EMAIL", ""),
 		RequestsForum:  get("NANOCLAW_REQUESTS_FORUM", "requests"),
+		WorkerURL:      strings.TrimRight(get("NANOCLAW_WORKER_URL", ""), "/"),
+		WorkerToken:    get("NANOCLAW_WORKER_TOKEN", ""),
 	}
 	if cfg.Workspace == "" {
 		cfg.Workspace = cfg.DataDir + "/workspace"

@@ -356,6 +356,19 @@ Read an existing file first and send its complete corrected contents. Never use
 put_file with a Gemfile or lockfile fragment. Use delete_file when a generated
 file truly needs removal instead of raw GitHub API calls from the shell.
 
+WRITING TESTS IN A GENERATED APP: before writing or editing any test file,
+read ONE neighboring test in the same directory and copy its conventions —
+helpers, fixtures, assertion style. The foundation does NOT include
+Devise::Test::IntegrationHelpers anywhere, so Devise's sign_in helper does not
+exist in integration tests; each integration test defines its own local
+helper and signs in through the real endpoint:
+  PASSWORD = "correct horse battery" # matches test/fixtures/users.yml
+  def sign_in_as(user, password: PASSWORD)
+    post user_session_path, params: { user: { email: user.email, password: password } }
+  end
+Calling a helper that is not defined in that file or test_helper.rb is the
+single most common verification failure — check before you rely on one.
+
 EXTERNAL DATASETS — sample once, then write the importer. When an app needs a
 public dataset, catalog, price feed, or any bulk external source: fetch ONE SMALL SAMPLE
 in a read phase (enough to learn field names, id format, nesting — a single
@@ -584,8 +597,13 @@ func turnDeadline(toolIters, passes int, coder bool) time.Duration {
 	perIteration := 30 * time.Second
 	maxDeadline := 12 * time.Minute
 	if coder {
-		perIteration = 90 * time.Second
-		maxDeadline = 30 * time.Minute
+		// A single Holodex verify of a Rails app runs 1.5–4 min server-side,
+		// and an honest build needs several verify→fix→verify round trips
+		// plus a deploy. At 90s/iteration the default 20-iteration turn died
+		// at exactly 30 min — twice, mid-build, on 2026-08-14 — so budget
+		// what a build iteration actually costs and cap the lane at 45.
+		perIteration = 135 * time.Second
+		maxDeadline = 45 * time.Minute
 	}
 	dl := time.Duration(toolIters*passes) * perIteration
 	if dl < 3*time.Minute {
@@ -622,17 +640,47 @@ func (a *Agent) Observe(ch, authorID, author, content string, decide bool) bool 
 // command never dead-ends.
 func (a *Agent) FrameRequest(author, task string) (title, body string) {
 	fallbackTitle := clip(strings.TrimSpace(task), 90)
-	fallback := fmt.Sprintf("**Goal:** %s\n\n**Plan:** I’ll turn this into the smallest working version, test it, publish the code, and share the result here.\n\n**Approval:** Reply `go ahead` to start, or tell me what to change first.", strings.TrimSpace(task))
+	fallbackPlan := "I’ll turn this into the smallest working version, test it, publish the code, and share the result here."
+	if a.cfg.RailsTemplate != "" {
+		fallbackPlan = "I’ll build this as a Rails app on my foundation, run the full verification, and share the public repo and the live demo link here."
+		if a.cfg.SandboxURL == "" {
+			fallbackPlan = "I’ll build this as a Rails app on my foundation, run the full verification, and share the public repo here (no live demo on this instance — that needs a Holodex deploy target)."
+		}
+	}
+	fallback := fmt.Sprintf("**Goal:** %s\n\n**Plan:** %s\n\n**Approval:** Reply `go ahead` to start, or tell me what to change first.", strings.TrimSpace(task), fallbackPlan)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	prompt := fmt.Sprintf(`You are Vela. %s opened a build/creation request. Write the proposal you will wait for them to approve before building. State one concrete goal, a short practical plan, and visible acceptance criteria (what "done" looks like). Pick the most useful concrete version if the request is vague. End by telling them to reply "go ahead" to approve and start, or describe changes. Your texting voice: plain, sharp, no preamble.
+	// The framing model doesn't get the tool loop's system prompt, so it must
+	// be told the house stack here — without this it invents one ("plain
+	// HTML/JS, no backend") and the approved plan contradicts the build.
+	stack := ""
+	if a.cfg.RailsTemplate != "" {
+		// Holodex is an optional plugin. Without it Vela still builds and
+		// publishes the repository — she just has nowhere to host the live
+		// demo, so the plan must not promise one.
+		delivery := `verified, and deployed to Holodex with a public GitHub repo as the
+permanent copy. "Done" includes the public repo link and the live demo link.`
+		if a.cfg.SandboxURL == "" {
+			delivery = `and published as a public GitHub repo, which is the deliverable.
+This instance has no Holodex deploy target configured, so do NOT promise a live
+demo — "done" is the public repo, running locally with the documented commands.`
+		}
+		stack = `
+
+Stack is FIXED and not yours to choose: every app is Ruby on Rails on the Vela
+foundation (Hotwire/Stimulus front end), built from the private template, ` + delivery + `
+Frame the plan in those terms — never propose plain HTML/JS, "no backend",
+another framework, or localStorage persistence (the database does that).`
+	}
+	prompt := fmt.Sprintf(`You are Vela. %s opened a build/creation request. Write the proposal you will wait for them to approve before building. State one concrete goal, a short practical plan, and visible acceptance criteria (what "done" looks like). Pick the most useful concrete version if the request is vague. End by telling them to reply "go ahead" to approve and start, or describe changes. Your texting voice: plain, sharp, no preamble.%s
 
 The request: %s
 
-Reply with ONLY this JSON: {"title":"<short title, max 90 chars>","body":"<the post body, a few sentences>"}`, author, task)
+Reply with ONLY this JSON: {"title":"<short title, max 90 chars>","body":"<the post body, a few sentences>"}`, author, stack, task)
 	msg, err := a.llm.Chat(ctx, []Msg{{Role: "user", Content: prompt}}, nil)
 	if err != nil {
+		log.Printf("request framing fell back to plain text: %v", err)
 		return fallbackTitle, fallback
 	}
 	var out struct{ Title, Body string }

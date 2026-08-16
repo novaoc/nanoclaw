@@ -27,6 +27,9 @@ type Bot struct {
 	threads  *OwnedThreads // forum posts Vela created; replies are addressed to her
 	pending  int32         // in-flight + queued turns, to cap a spam pile-up (maxPending)
 	draining int32         // set on SIGTERM: finish in-flight turns, take no new ones
+	// lastEvent is the unix-nano stamp of the most recent gateway dispatch of
+	// any kind — the signal the deaf-session watchdog measures.
+	lastEvent atomic.Int64
 }
 
 // maxPending bounds queued goroutines so a message flood can't OOM the 128 MB
@@ -53,6 +56,7 @@ func NewBot(cfg *Config, agent *Agent) (*Bot, error) {
 	s.AddHandler(b.onReady)
 	s.AddHandler(b.onGuildCreate)
 	s.AddHandler(b.onInteraction)
+	s.AddHandler(b.markEvent) // catch-all: feeds the deaf-session watchdog
 	return b, nil
 }
 
@@ -225,6 +229,9 @@ func (b *Bot) onRequestCommand(s *discordgo.Session, i *discordgo.InteractionCre
 			Author: author, Request: task,
 		})
 		if err != nil {
+			// This branch used to be invisible in the log — a /request could
+			// fail user-visibly with no server-side trace at all.
+			log.Printf("request post FAILED by=%s forum=%s: %v", authorID, fname, err)
 			_, _ = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 				Content: "Couldn't open the post in #" + fname + " (is it a forum channel I can post in?): " + err.Error(),
 			})
@@ -328,8 +335,14 @@ func (b *Bot) onDiveCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 	}()
 }
 
-func (b *Bot) Start() error { return b.session.Open() }
-func (b *Bot) Close()       { _ = b.session.Close() }
+func (b *Bot) Start() error {
+	if err := b.session.Open(); err != nil {
+		return err
+	}
+	go b.watchGateway()
+	return nil
+}
+func (b *Bot) Close() { _ = b.session.Close() }
 
 // takeLane reserves either the build lane (coder turns) or an ordinary slot.
 // Release is always safe to defer — including across panics — so a failed

@@ -33,8 +33,8 @@ type ToolCtx struct {
 	usedWeb   bool     // this turn touched the web (fetch/search)
 	usedCode  bool     // this turn ran code (shell/file) — mutually exclusive with web
 	boundary  *phaseBoundary
-	exhausted bool // this lane used its full tool budget without a final answer
-	repoReads int  // focused GitHub inspection calls; bounded to prevent analysis loops
+	exhausted bool         // this lane used its full tool budget without a final answer
+	repoReads int          // focused GitHub inspection calls; bounded to prevent analysis loops
 	ghCache   *ghRepoCache // turn-scoped GitHub tree/blob cache for remote search
 	appSpec   *AppSpec     // structured build specification for the current turn/job
 	// notify posts a mid-turn status message (supplied by Discord). Nil in eval.
@@ -214,6 +214,11 @@ func toolDefs(cfg *Config) []ToolDef {
 				mk("deploy_repo",
 					"Deploy a verified Ruby on Rails GitHub repository to Holodex, coder-only. REQUIRED for every Vela application. REQUIRES the exact commit SHA and signed receipt returned by verify_repo; Holodex rejects changed, expired, or untested source. Runtime remains locked down with no internet egress and the whole deck wipes daily.",
 					`{"type":"object","properties":{"repo":{"type":"string"},"name":{"type":"string","description":"app/display name"},"ref":{"type":"string","description":"exact commit SHA returned by verify_repo"},"receipt":{"type":"string","description":"signed receipt returned by verify_repo"},"port":{"type":"integer","description":"listen port; otherwise root Dockerfile EXPOSE or 8080"}},"required":["repo","name","ref","receipt"]}`))
+			if cfg.WorkerEnabled() {
+				defs = append(defs, mk("enqueue_build",
+					"PREFERRED for building an app: hand the freshly forked repo to the build worker and return immediately, so you stay free to talk and take other requests while it works. The worker clones the repo, implements the spec, runs the foundation test suite locally, pushes commits, and verifies on Holodex; it posts progress in this thread and you deploy automatically when it passes. Use AFTER app_spec + create_rails_app have made the fork. Args: repo (owner/name), name (app/display name), instructions (any product detail the worker should honor), port (optional). Do NOT then call verify_repo/deploy_repo yourself — the worker and the auto-deploy handle it.",
+					`{"type":"object","properties":{"repo":{"type":"string"},"name":{"type":"string"},"instructions":{"type":"string","description":"product detail and constraints for the worker"},"port":{"type":"integer"}},"required":["repo","name"]}`))
+			}
 		}
 	}
 	if cfg.CodeEnabled() { // gated to the coder allowlist (VELA_CODERS)
@@ -284,19 +289,20 @@ type toolArgs struct {
 	Pattern, Glob                                                       string // search_code
 	// snake_case keys need explicit tags — Go's JSON matching ignores case but
 	// NOT underscores, so without this "image_url" silently unmarshals to "".
-	ImageURL   string `json:"image_url"`
-	Days       int
-	Seconds    int // slowmode seconds
-	N          int // image count
-	Benchmarks []string
-	Models     []benchModel
-	Files      []demoFile // deploy_demo: the app's files
-	Paths      []string   // github read_files: focused repository files
-	Tables     []string   `json:"tables"` // github describe_schema: table names
-	Ops        []patchOp  // apply_patch
-	Port       int        // deploy_demo: container app's listen port (optional)
-	StartLine  int        `json:"start_line"` // read_file / read_files: 1-based; 0 = omit
-	EndLine    int        `json:"end_line"`   // inclusive; 0 = omit (through EOF / budget)
+	ImageURL     string `json:"image_url"`
+	Days         int
+	Seconds      int // slowmode seconds
+	N            int // image count
+	Benchmarks   []string
+	Models       []benchModel
+	Files        []demoFile // deploy_demo: the app's files
+	Paths        []string   // github read_files: focused repository files
+	Tables       []string   `json:"tables"` // github describe_schema: table names
+	Ops          []patchOp  // apply_patch
+	Port         int        // deploy_demo: container app's listen port (optional)
+	StartLine    int        `json:"start_line"`   // read_file / read_files: 1-based; 0 = omit
+	EndLine      int        `json:"end_line"`     // inclusive; 0 = omit (through EOF / budget)
+	Instructions string     `json:"instructions"` // enqueue_build: request context for the worker
 }
 
 type demoFile struct {
@@ -343,7 +349,7 @@ func (tc *ToolCtx) Run(name, args string) string {
 	// would otherwise be an exfiltration channel via the URL.
 	web := name == "web_search" || name == "fetch_url" || name == "tcg" || name == "price_chart" || name == "attach_image" || name == "model_releases" || name == "generate_image" || name == "generate_video"
 	// app_spec is structural (may commit via GitHub) — treat as code lane when it touches the repo.
-	code := name == "shell" || name == "write_file" || name == "apply_patch" || name == "search_code" || name == "read_file" || name == "github" || name == "deploy_demo" || name == "verify_repo" || name == "deploy_repo" || name == "app_spec"
+	code := name == "shell" || name == "write_file" || name == "apply_patch" || name == "search_code" || name == "read_file" || name == "github" || name == "deploy_demo" || name == "verify_repo" || name == "deploy_repo" || name == "enqueue_build" || name == "app_spec"
 	if web && tc.usedCode {
 		tc.boundary = &phaseBoundary{Lane: "web", Tool: name}
 		return "PHASE_BOUNDARY: web fetch deferred to a fresh isolated read-only phase."
@@ -408,6 +414,8 @@ func (tc *ToolCtx) Run(name, args string) string {
 		return tc.verifyRepo(a)
 	case "deploy_repo":
 		return tc.deployRepo(a)
+	case "enqueue_build":
+		return tc.enqueueBuild(a)
 	case "shell":
 		return tc.runShell(a.Command)
 	case "write_file":

@@ -160,9 +160,18 @@ func TestAgentRetriesEmptyTruncatedResponse(t *testing.T) {
 			_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":""}}]}`))
 			return
 		}
+		// The client-level re-roll fires before the agent ever sees the empty
+		// message: same transcript (no nudge appended), doubled output budget,
+		// and an explicit reasoning cap so thinking cannot eat it all again.
+		if req.MaxTok != 16384 {
+			t.Errorf("re-roll MaxTok = %d, want 16384", req.MaxTok)
+		}
+		if req.Reasoning == nil || req.Reasoning.MaxTokens != 4000 {
+			t.Errorf("re-roll reasoning cap missing: %+v", req.Reasoning)
+		}
 		last := req.Messages[len(req.Messages)-1]
-		if !strings.Contains(last.Content, "one small scaffold/repository tool call") {
-			t.Errorf("missing compact retry instruction: %q", last.Content)
+		if strings.Contains(last.Content, "one small scaffold") {
+			t.Errorf("re-roll must not append a nudge to the transcript: %q", last.Content)
 		}
 		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"recovered in the same turn"}}]}`))
 	}))

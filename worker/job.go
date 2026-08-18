@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -49,6 +50,19 @@ func (s *server) runJob(id string) {
 		return
 	}
 	writeWorkspaceEnvNote(ws)
+
+	// Install the app's gems before the agent starts. Without this every
+	// run_tests dies instantly in bundler ("Could not find rails … in locally
+	// installed gems") and the model has no way to diagnose it. Gems land in
+	// the shared BUNDLE_PATH, so later jobs on the same container reuse them
+	// and this is only slow the first time.
+	s.store.update(id, func(j *buildJob) { j.Detail = "installing gems" })
+	started := time.Now()
+	if out, err := ws.runShell("bundle install 2>&1 | tail -30", 15*time.Minute); err != nil {
+		s.fail(id, "bundle install failed: "+tailOf(out, 2000))
+		return
+	}
+	log.Printf("job %s: gems ready in %s", id, time.Since(started).Round(time.Second))
 
 	messages := []chatMsg{
 		{Role: "system", Content: workerSystemPrompt},
@@ -92,9 +106,18 @@ func (s *server) runJob(id string) {
 			default:
 				reads = 0
 			}
+			// Past twice the budget the guard stops asking and starts
+			// refusing: the soft nudge alone was ignored for 30 straight
+			// minutes of exploration on 2026-08-16. Progress tools
+			// (write_file, run_tests, commit, verify, done) reset it.
+			if reads > 2*maxConsecutiveReads {
+				messages = append(messages, toolResultMsg(call.ID, call.Function.Name,
+					"REFUSED: read budget exhausted. Only write_file, run_tests, commit_and_push, verify, report and done are accepted until you make progress."))
+				continue
+			}
 			started := time.Now()
 			result := s.execTool(id, ws, call)
-			if reads == maxConsecutiveReads {
+			if reads >= maxConsecutiveReads {
 				result += "\n\nINSPECTION_COMPLETE: you have read enough of this repository. " +
 					"Stop exploring and start implementing with write_file now; run_tests will tell you what you still need to know."
 			}
@@ -183,9 +206,12 @@ func (s *server) execTool(id string, ws *workspace, call toolCall) string {
 		s.store.update(id, func(j *buildJob) { j.Detail = "running the local test suite" })
 		out, err := ws.runTests()
 		if err != nil {
-			return fmt.Sprintf("TESTS FAILED (%v)\n%s", err, out)
+			// The raw suite output runs to tens of kilobytes; dumping it into
+			// the transcript drowned the model. Keep the failure blocks and
+			// the summary line — the parts it can act on.
+			return "TESTS FAILED\n" + distillMinitest(out, 6000)
 		}
-		return "TESTS PASSED\n" + out
+		return "TESTS PASSED\n" + distillMinitest(out, 1500)
 
 	case "commit_and_push":
 		sha, err := s.commitAll(ws, args.Message)
@@ -256,4 +282,52 @@ func tailOf(s string, n int) string {
 		return s
 	}
 	return "…" + s[len(s)-n:]
+}
+
+// distillMinitest reduces raw `rails test` output to what a model can act on:
+// every Error:/Failure: block (deduplicated) plus the run summary, capped at
+// budget bytes. The full stream — dots, seed lines, deprecations — taught us
+// on 2026-08-16 that a 40 KB tool result is worse than no result.
+func distillMinitest(out string, budget int) string {
+	lines := strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n")
+	var blocks []string
+	seen := map[string]bool{}
+	summary := ""
+	for i := 0; i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if strings.Contains(t, " runs, ") && strings.Contains(t, " assertions") {
+			summary = t
+		}
+		if t != "Error:" && t != "Failure:" {
+			continue
+		}
+		var block []string
+		for j := i; j < len(lines) && j < i+12; j++ {
+			if j > i && strings.TrimSpace(lines[j]) == "" {
+				break
+			}
+			block = append(block, lines[j])
+		}
+		i += len(block) - 1
+		b := strings.Join(block, "\n")
+		if !seen[b] {
+			seen[b] = true
+			blocks = append(blocks, b)
+		}
+	}
+	res := summary
+	if len(blocks) > 0 {
+		res = summary + "\n\n" + strings.Join(blocks, "\n\n")
+	}
+	if res == "" {
+		res = out // nothing recognisable — better the tail than silence
+		if len(res) > budget {
+			res = "…" + res[len(res)-budget:]
+		}
+		return res
+	}
+	if len(res) > budget {
+		res = res[:budget] + "\n…[more failures truncated — fix these first]"
+	}
+	return res
 }

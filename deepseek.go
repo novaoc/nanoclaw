@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -46,6 +48,9 @@ type chatRequest struct {
 	Messages []Msg     `json:"messages"`
 	Tools    []ToolDef `json:"tools,omitempty"`
 	MaxTok   int       `json:"max_tokens,omitempty"`
+	// Reasoning caps hidden thinking tokens (OpenRouter-style; providers that
+	// don't support it ignore the field). Set only on length-empty re-rolls.
+	Reasoning *reasoningCfg `json:"reasoning,omitempty"`
 }
 
 // Multimodal request shapes (OpenAI vision format): the user message content
@@ -107,7 +112,28 @@ func (l *LLM) Chat(ctx context.Context, messages []Msg, tools []ToolDef) (*Msg, 
 	if err != nil {
 		return nil, err
 	}
-	return l.post(ctx, body)
+	msg, err := l.post(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+	// finish=length with NOTHING visible means the whole output budget went
+	// to hidden reasoning — it happens on long build-turn contexts, and three
+	// in a row killed a live build on 2026-08-18. Re-roll once with double
+	// the ceiling and an explicit reasoning cap before handing the agent an
+	// empty message; the agent's own triple-empty stop stays as the backstop.
+	if msg.FinishReason == "length" && strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
+		log.Printf("llm length-empty — re-rolling with a doubled output budget")
+		retry, rerr := json.Marshal(chatRequest{
+			Model: l.model, Messages: messages, Tools: tools, MaxTok: 16384,
+			Reasoning: &reasoningCfg{MaxTokens: 4000},
+		})
+		if rerr == nil {
+			if second, serr := l.post(ctx, retry); serr == nil {
+				return second, nil
+			}
+		}
+	}
+	return msg, nil
 }
 
 // post sends a pre-marshalled chat/completions body and retries transient

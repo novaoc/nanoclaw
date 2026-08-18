@@ -90,6 +90,14 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		// Shaping is mechanical and must not depend on the model calling a
 		// separate step: stamp identity, write app README, omit unselected modules.
 		shapeOut := gh.shapeGeneratedApp(a.Name, tc.appSpec, tc.cfg)
+		// When the build worker is configured, the hand-off is not optional.
+		// Without this line the model sometimes built inline out of habit
+		// (2026-08-18: a whole roguelike written file-by-file on the board
+		// while the worker sat idle) — the tool result is the strongest
+		// steering surface we have, so the routing lives here.
+		if tc.cfg.WorkerEnabled() {
+			return out + "\n" + shapeOut + "\n\nNEXT STEP (required on this instance): call enqueue_build with this repo, the app name, and the request context. Do NOT implement the product yourself with put_file/patch_file, and do NOT call verify_repo — the worker codes, tests, and verifies; the deploy is automatic after it passes. Your only remaining job here is enqueue_build, then tell the requester the build is underway."
+		}
 		return out + "\n" + shapeOut
 	case "shape":
 		// Optional re-shape of an existing generated app (identity/README/modules).

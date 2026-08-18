@@ -791,6 +791,17 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 		notify: t.Notify, setBuildName: t.SetBuildName, deadline: dl,
 	}
 	sys := fmt.Sprintf(systemPrompt, modelDesc(a.cfg), orNone(readMemory(a.cfg)))
+	// With the build worker configured, the inline house flow in the static
+	// prompt is wrong — and the model follows whichever flow the prompt
+	// blesses (2026-08-18: it hand-built a roguelike inline while the worker
+	// idled). Rewrite the flow sentence rather than praying the tool result
+	// alone re-routes it.
+	if a.cfg.WorkerEnabled() {
+		sys = strings.Replace(sys,
+			"the house flow is app_spec → create_rails_app\n  (auto-shapes identity, README, module omission — do not call shape separately)\n  → focused\n  edits → verify_repo → deploy_repo → hand back BOTH the public repo and live",
+			"the house flow is app_spec → create_rails_app\n  (auto-shapes identity, README, module omission — do not call shape separately)\n  → enqueue_build, which hands the entire implementation to the build worker\n  and ENDS your part. Never implement a requested product inline with\n  put_file/patch_file and never call verify_repo/deploy_repo yourself when\n  the worker exists — it codes, tests, verifies, and the deploy happens\n  automatically. After enqueue_build, hand back BOTH the public repo and live",
+			1)
+	}
 	// 2.0 social context: who this person is to Vela, and how this channel
 	// talks — learned, not configured.
 	if a.cfg.Learning {

@@ -142,3 +142,24 @@ func TestScrubRemovesSecret(t *testing.T) {
 		t.Fatalf("empty-secret scrub altered the string: %q", got)
 	}
 }
+
+func TestDistillMinitestKeepsFailuresAndSummary(t *testing.T) {
+	raw := strings.Repeat("Run options: --seed 1234\n........\n", 200) +
+		"Failure:\nBillingTest#test_checkout [test/integration/billing_test.rb:107]:\n--- expected\n+++ actual\n-\"https://example.com/billing\"\n+\"https://blankpage.api.holode.xyz/billing\"\n\n" +
+		strings.Repeat(".....\n", 400) +
+		"Error:\nStorefrontCheckoutServicesTest#test_origin:\nFoundation::RuntimeConfig::Invalid: APP_HOST must be the configured domain\n\n" +
+		"396 runs, 3101 assertions, 5 failures, 1 errors, 8 skips\n"
+	got := distillMinitest(raw, 6000)
+	if !strings.Contains(got, "396 runs") {
+		t.Fatalf("summary lost:\n%s", got)
+	}
+	if !strings.Contains(got, "blankpage.api.holode.xyz") || !strings.Contains(got, "RuntimeConfig::Invalid") {
+		t.Fatalf("failure blocks lost:\n%s", got)
+	}
+	if len(got) > 6200 {
+		t.Fatalf("budget blown: %d bytes", len(got))
+	}
+	if strings.Count(got, "....") > 2 {
+		t.Fatalf("distilled output still full of progress dots")
+	}
+}

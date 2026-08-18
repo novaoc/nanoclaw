@@ -22,6 +22,12 @@ func main() {
 		runEval(os.Args[2], os.Args[3])
 		return
 	}
+	// `vela pipetest`: one real build request through the whole pipeline,
+	// headless — the self-test that replaces "ask in Discord and hope".
+	if len(os.Args) >= 2 && os.Args[1] == "pipetest" {
+		runPipeTest()
+		return
+	}
 
 	cfg, err := LoadConfig()
 	if err != nil {

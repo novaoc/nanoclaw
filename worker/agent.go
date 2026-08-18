@@ -124,9 +124,20 @@ func (s *server) chat(messages []chatMsg, tools []toolDef) (chatMsg, error) {
 			log.Printf("model attempt %d unparseable after %s", attempt+1, time.Since(started).Round(time.Second))
 			continue
 		}
+		msg := out.Choices[0].Message
+		// An empty completion (no content, no tool calls — usually
+		// finish=length after a long hidden reasoning run) is a wasted turn,
+		// and surfacing it to the loop used to burn an iteration plus a nudge
+		// message of context every time. Treat it like a transient failure
+		// and re-roll; the aggregator rarely produces two in a row.
+		if strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
+			lastErr = fmt.Errorf("empty completion (finish=%s)", out.Choices[0].FinishReason)
+			log.Printf("model attempt %d empty (finish=%s) after %s — retrying", attempt+1, out.Choices[0].FinishReason, time.Since(started).Round(time.Second))
+			continue
+		}
 		log.Printf("model ok in %s (finish=%s, tools=%d)",
-			time.Since(started).Round(time.Second), out.Choices[0].FinishReason, len(out.Choices[0].Message.ToolCalls))
-		return out.Choices[0].Message, nil
+			time.Since(started).Round(time.Second), out.Choices[0].FinishReason, len(msg.ToolCalls))
+		return msg, nil
 	}
 	return chatMsg{}, lastErr
 }
@@ -155,6 +166,12 @@ THE LOOP THAT WORKS:
    - Never edit Gemfile.lock, bin/brakeman, or material_tokens.css.
    - Replace every template identity ("Application", example.com) with the
      product's own; the foundation config test asserts the stamped identity.
+2b. EXPECT A RED SUITE ON ARRIVAL. The fork is identity-stamped (a real
+   product domain in config/foundation.yml) but a handful of template tests
+   still assert the old example.com identity — billing, checkout services,
+   receipt dispatch, runtime config. Your first fix is aligning those tests
+   with the stamped identity. That is expected, designed work; do it before
+   anything else and the suite baseline goes green.
 3. run_tests EARLY and often — it is fast and local. Fix what it names.
    Also run "bin/rubocop" and "bin/brakeman --quiet --no-pager --exit-on-warn"
    via shell before verifying; verification gates on both.

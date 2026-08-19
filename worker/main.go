@@ -28,7 +28,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -148,9 +147,6 @@ func newID() string {
 type server struct {
 	cfg   config
 	store *store
-	// previews holds each job's running dev server (see preview.go). Guarded
-	// by store.mu; one entry at a time in practice (single build slot).
-	previews map[string]*exec.Cmd
 }
 
 func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
@@ -174,6 +170,7 @@ func (s *server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		JobID        string `json:"job_id"` // must match the ticket's job field
 		DeployTicket string `json:"deploy_ticket"`
 		ChannelID    string `json:"channel_id"`
+		SHA          string `json:"sha"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&req); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
@@ -197,8 +194,8 @@ func (s *server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	job := &buildJob{
 		ID: req.JobID, Repo: req.Repo, Name: req.Name, Port: req.Port,
 		State: "queued", Detail: "queued", Created: time.Now(), Updated: time.Now(),
-		ChannelID: req.ChannelID,
-		ticket:    req.Ticket, deployTicket: req.DeployTicket,
+		ChannelID: req.ChannelID, SHA: strings.ToLower(strings.TrimSpace(req.SHA)),
+		ticket: req.Ticket, deployTicket: req.DeployTicket,
 		spec: req.Spec, instructions: req.Instructions,
 	}
 	s.store.mu.Lock()

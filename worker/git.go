@@ -1,97 +1,17 @@
 package main
 
-// Git and Holodex client operations for the worker. The GitHub token and the
-// Holodex bearer are used ONLY here, in the daemon process — they are never
-// placed in the sandbox environment the model's shell sees.
+// Holodex client: ticket-authorized verification and deployment. The worker
+// holds no build secret — its entire authority is the pair of tickets Vela
+// signs at enqueue: a budgeted verify ticket and a single-use, receipt-gated
+// deploy ticket.
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"time"
 )
-
-// cloneRepo does a shallow clone into the workspace using the scoped push
-// token in the remote URL. The token is stripped from the stored remote
-// afterwards so it never lingers in .git/config inside the sandbox.
-func (s *server) cloneRepo(ws *workspace) error {
-	url := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", s.cfg.GitHubToken, ws.repo)
-	if out, err := gitRun(ws.root, "", "clone", "--depth", "1", url, "."); err != nil {
-		return fmt.Errorf("clone failed: %s", scrub(out, s.cfg.GitHubToken))
-	}
-	// Replace the credentialed remote with a clean one.
-	clean := fmt.Sprintf("https://github.com/%s.git", ws.repo)
-	_, _ = gitRun(ws.root, "", "remote", "set-url", "origin", clean)
-	return nil
-}
-
-// commitAll stages everything and commits. Returns the new HEAD sha.
-func (s *server) commitAll(ws *workspace, message string) (string, error) {
-	if _, err := gitRun(ws.root, "", "add", "-A"); err != nil {
-		return "", err
-	}
-	// Nothing staged → return current HEAD unchanged.
-	if _, err := gitRun(ws.root, "", "diff", "--cached", "--quiet"); err == nil {
-		return s.headSHA(ws)
-	}
-	out, err := gitRun(ws.root, "",
-		"-c", "user.name=vela-worker",
-		"-c", "user.email=worker@velaoc.users.noreply.github.com",
-		"commit", "-m", message)
-	if err != nil {
-		return "", fmt.Errorf("commit failed: %s", out)
-	}
-	return s.headSHA(ws)
-}
-
-func (s *server) headSHA(ws *workspace) (string, error) {
-	out, err := gitRun(ws.root, "", "rev-parse", "HEAD")
-	return strings.TrimSpace(out), err
-}
-
-// push sends HEAD to origin/main using the token, which is injected only for
-// this one command via an ephemeral remote URL.
-func (s *server) push(ws *workspace) error {
-	url := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", s.cfg.GitHubToken, ws.repo)
-	if out, err := gitRun(ws.root, "", "push", url, "HEAD:main"); err != nil {
-		return fmt.Errorf("push failed: %s", scrub(out, s.cfg.GitHubToken))
-	}
-	return nil
-}
-
-// gitRun executes git with a stripped environment and a timeout.
-func gitRun(dir, _ string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
-	cmd.Env = []string{
-		"PATH=/usr/local/bin:/usr/bin:/bin",
-		"HOME=" + dir,
-		"GIT_TERMINAL_PROMPT=0", // never block on a credential prompt
-	}
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err := cmd.Run()
-	return buf.String(), err
-}
-
-func scrub(s, secret string) string {
-	if secret == "" {
-		return s
-	}
-	return strings.ReplaceAll(s, secret, "***")
-}
-
-// ── Holodex ticket-verify client ────────────────────────────────────────────
 
 type verifyResult struct {
 	OK         bool   `json:"ok"`
@@ -102,9 +22,7 @@ type verifyResult struct {
 	DurationMS int64  `json:"duration_ms"`
 }
 
-// ticketVerify submits a reference verification authorized by the job ticket
-// (not the build secret, which the worker does not have) and polls to
-// completion.
+// ticketVerify submits a reference verification and polls it to completion.
 func (s *server) ticketVerify(job *buildJob, sha string) (verifyResult, error) {
 	req, err := http.NewRequest(http.MethodPost, s.cfg.HolodexURL+"/api/verify/ref", nil)
 	if err != nil {
@@ -160,44 +78,7 @@ func (s *server) ticketVerify(job *buildJob, sha string) (verifyResult, error) {
 	return verifyResult{}, fmt.Errorf("holodex verification did not finish in time")
 }
 
-func writeWorkspaceEnvNote(ws *workspace) {
-	// A tiny marker so a confused shell command has an obvious cwd sentinel;
-	// purely diagnostic, never read by the agent logic.
-	_ = os.WriteFile(ws.root+"/.vela-workspace", []byte(ws.repo+"\n"), 0o644)
-}
-
-// rescuePush commits everything in a failed job's workspace to a wip branch
-// so no work is ever lost to the workspace cleanup — the sandclock build died
-// holding a green suite that existed nowhere else. Best effort: an untouched
-// tree returns without a branch.
-func (s *server) rescuePush(ws *workspace, id string) (string, error) {
-	if _, err := os.Stat(filepath.Join(ws.root, ".git")); err != nil {
-		return "", nil // clone never happened
-	}
-	before, _ := s.headSHA(ws)
-	sha, err := s.commitAll(ws, "WIP: rescued from failed build job "+id)
-	if err != nil {
-		return "", err
-	}
-	if sha == before {
-		// No local commits beyond origin? Check whether HEAD is already
-		// pushed: if origin/main == HEAD there is nothing to rescue.
-		if out, oerr := gitRun(ws.root, "", "rev-parse", "origin/main"); oerr == nil && strings.TrimSpace(out) == sha {
-			return "", nil
-		}
-	}
-	branch := "wip-" + id
-	url := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", s.cfg.GitHubToken, ws.repo)
-	if out, err := gitRun(ws.root, "", "push", url, "HEAD:refs/heads/"+branch); err != nil {
-		return "", fmt.Errorf("rescue push failed: %s", scrub(out, s.cfg.GitHubToken))
-	}
-	return branch, nil
-}
-
-// ticketDeploy ships a verified build using the single-use deploy ticket
-// granted at enqueue. The worker holds no build secret; this grant — bound to
-// one repo, one use, and a receipt proving the tested bytes — is the whole of
-// its deploy authority.
+// ticketDeploy ships a verified build using the single-use deploy ticket.
 func (s *server) ticketDeploy(job *buildJob, sha, receipt string) (string, error) {
 	req, err := http.NewRequest(http.MethodPost, s.cfg.HolodexURL+"/api/deploy/ref", nil)
 	if err != nil {

@@ -57,6 +57,7 @@ func main() {
 	}
 	learnCtx, stopLearning := context.WithCancel(context.Background())
 	agent.StartLearning(learnCtx) // background expression learning (2.0)
+	go bot.watchWorkerJobs()      // build announcer: worker change feed → forum threads
 	log.Printf("vela up — model=%s data=%s talk=%.2f learning=%v", cfg.Model, cfg.DataDir, cfg.TalkValue, cfg.Learning)
 
 	stop := make(chan os.Signal, 1)

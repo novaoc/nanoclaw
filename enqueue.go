@@ -37,6 +37,16 @@ func newWorkerJobID() string {
 	return "wj-" + hex.EncodeToString(b)
 }
 
+// signDeployTicket mirrors holodex deployTicket.canonical exactly.
+func signDeployTicket(secret, job, repo string, exp int64) string {
+	canonical := strings.Join([]string{
+		"holodex-deploy-ticket-v1", job, repo, strconv.FormatInt(exp, 10), "",
+	}, "\n")
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = io.WriteString(mac, canonical)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // signBuildTicket mirrors holodex ticket.canonical exactly.
 func signBuildTicket(secret, job, repo string, maxVerifies int, exp int64) string {
 	canonical := strings.Join([]string{
@@ -74,6 +84,15 @@ func (tc *ToolCtx) enqueueBuild(a toolArgs) string {
 	exp := time.Now().Add(ticketTTL).Unix()
 	ticketSig := signBuildTicket(tc.cfg.SandboxSecret, job, ownerRepo, ticketMaxVerifies, exp)
 	ticket := strings.Join([]string{job, ownerRepo, strconv.Itoa(ticketMaxVerifies), strconv.FormatInt(exp, 10), ticketSig}, ":")
+	// The deploy grant: single-use, repo-bound, receipt-gated on the server.
+	// Signed here — at the moment a human's approval became a build — which
+	// is where deploy authority belongs. Expiry is replay protection only, so
+	// it is generous enough that a build queued behind others never loses its
+	// grant (the 55-minute watcher cliff of the poller era, by design, cannot
+	// exist here).
+	depExp := time.Now().Add(24 * time.Hour).Unix()
+	depSig := signDeployTicket(tc.cfg.SandboxSecret, job, ownerRepo, depExp)
+	depTicket := strings.Join([]string{job, ownerRepo, strconv.FormatInt(depExp, 10), depSig}, ":")
 
 	spec := ""
 	if tc.appSpec != nil {
@@ -83,6 +102,7 @@ func (tc *ToolCtx) enqueueBuild(a toolArgs) string {
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"job_id": job, "repo": ownerRepo, "name": name, "ticket": ticket,
+		"deploy_ticket": depTicket, "channel_id": tc.channelID,
 		"spec": spec, "instructions": strings.TrimSpace(a.Instructions), "port": a.Port,
 	})
 
@@ -105,10 +125,11 @@ func (tc *ToolCtx) enqueueBuild(a toolArgs) string {
 	}
 
 	tc.usedCode = true
-	// The poller outlives this turn; capture what it needs by value.
-	if tc.disc != nil && tc.channelID != "" {
-		go tc.pollWorkerJob(job, ownerRepo, name, a.Port, tc.channelID, tc.disc)
-	}
+	// No per-job watcher anymore: the worker owns the whole lifecycle
+	// (including the deploy), and the announcer's single change-feed loop
+	// posts every transition to the recorded thread — restart-proof, because
+	// the mapping is on disk and the truth is on the worker.
+	rememberWorkerJob(tc.cfg, job, workerJobNote{Channel: tc.channelID, Name: name, Repo: ownerRepo})
 	// Deliberately terminal wording. The first wording ("I'll keep working
 	// here") read as *continue* and the model re-ran the entire flow, spec and
 	// all, enqueueing the same repo a second time. This says: hand-off done,

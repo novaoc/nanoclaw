@@ -28,6 +28,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +42,7 @@ type config struct {
 	ModelKey     string
 	ModelURL     string
 	Model        string
+	VisionModel  string
 	GitHubToken  string
 	HolodexURL   string
 	HolodexToken string
@@ -59,6 +62,7 @@ func loadConfig() config {
 		ModelKey:     get("DEEPSEEK_API_KEY", ""),
 		ModelURL:     strings.TrimSuffix(get("DEEPSEEK_API_URL", "https://api.deepseek.com"), "/"),
 		Model:        get("WORKER_MODEL", "deepseek-chat"),
+		VisionModel:  get("WORKER_VISION_MODEL", ""),
 		GitHubToken:  get("GITHUB_TOKEN", ""),
 		HolodexURL:   strings.TrimSuffix(get("HOLODEX_URL", ""), "/"),
 		HolodexToken: get("HOLODEX_TOKEN", ""),
@@ -84,16 +88,21 @@ type buildJob struct {
 	ID           string    `json:"id"`
 	Repo         string    `json:"repo"` // owner/name
 	Name         string    `json:"name"`
-	State        string    `json:"state"`  // queued | coding | verifying | verified | failed
+	State        string    `json:"state"`  // queued | coding | verifying | verified | deployed | failed
 	Detail       string    `json:"detail"` // last human-readable status line
 	SHA          string    `json:"sha"`
 	Receipt      string    `json:"receipt"`
 	Port         int       `json:"port"`
+	URL          string    `json:"url"`        // live demo URL once deployed
+	ChannelID    string    `json:"channel_id"` // opaque board-side thread id, echoed back
+	QueuePos     int       `json:"queue_pos"`  // 0 = running/done; N = builds ahead
+	Seq          int64     `json:"seq"`        // bumped on every update (change feed cursor)
 	Created      time.Time `json:"created"`
 	Updated      time.Time `json:"updated"`
 	VerifiesUsed int       `json:"verifies_used"`
 
 	ticket       string
+	deployTicket string
 	spec         string
 	instructions string
 }
@@ -104,10 +113,14 @@ type store struct {
 	// One build at a time: local test suites are heavy and the box also
 	// serves production. Raise later if the box proves bored.
 	slot chan struct{}
+	// Change feed: seq bumps on every job update; waiters holds parked
+	// long-polls that are released (closed) on any change.
+	seq     int64
+	waiters chan struct{}
 }
 
 func newStore() *store {
-	return &store{jobs: map[string]*buildJob{}, slot: make(chan struct{}, 1)}
+	return &store{jobs: map[string]*buildJob{}, slot: make(chan struct{}, 1), waiters: make(chan struct{})}
 }
 
 func (st *store) update(id string, fn func(*buildJob)) {
@@ -116,6 +129,11 @@ func (st *store) update(id string, fn func(*buildJob)) {
 	if j, ok := st.jobs[id]; ok {
 		fn(j)
 		j.Updated = time.Now()
+		st.seq++
+		j.Seq = st.seq
+		// Release every parked long-poll: close-and-replace broadcast.
+		close(st.waiters)
+		st.waiters = make(chan struct{})
 	}
 }
 
@@ -130,6 +148,9 @@ func newID() string {
 type server struct {
 	cfg   config
 	store *store
+	// previews holds each job's running dev server (see preview.go). Guarded
+	// by store.mu; one entry at a time in practice (single build slot).
+	previews map[string]*exec.Cmd
 }
 
 func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
@@ -151,6 +172,8 @@ func (s *server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		Instructions string `json:"instructions"`
 		Port         int    `json:"port"`
 		JobID        string `json:"job_id"` // must match the ticket's job field
+		DeployTicket string `json:"deploy_ticket"`
+		ChannelID    string `json:"channel_id"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&req); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
@@ -174,7 +197,9 @@ func (s *server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	job := &buildJob{
 		ID: req.JobID, Repo: req.Repo, Name: req.Name, Port: req.Port,
 		State: "queued", Detail: "queued", Created: time.Now(), Updated: time.Now(),
-		ticket: req.Ticket, spec: req.Spec, instructions: req.Instructions,
+		ChannelID: req.ChannelID,
+		ticket:    req.Ticket, deployTicket: req.DeployTicket,
+		spec: req.Spec, instructions: req.Instructions,
 	}
 	s.store.mu.Lock()
 	if _, exists := s.store.jobs[job.ID]; exists {
@@ -206,12 +231,35 @@ func (s *server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": job.ID, "state": "queued"})
 }
 
+// queuePosLocked counts non-terminal jobs created before j — its place in
+// line. Call with store.mu held.
+func (st *store) queuePosLocked(j *buildJob) int {
+	if j.State != "queued" {
+		return 0
+	}
+	pos := 0
+	for _, other := range st.jobs {
+		if other.ID == j.ID {
+			continue
+		}
+		switch other.State {
+		case "failed", "deployed", "verified":
+			continue
+		}
+		if other.Created.Before(j.Created) {
+			pos++
+		}
+	}
+	return pos
+}
+
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.store.mu.Lock()
 	j, ok := s.store.jobs[r.PathValue("id")]
 	var out buildJob
 	if ok {
 		out = *j
+		out.QueuePos = s.store.queuePosLocked(j)
 	}
 	s.store.mu.Unlock()
 	if !ok {
@@ -237,10 +285,53 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /jobs", s.auth(s.handleEnqueue))
 	mux.HandleFunc("GET /jobs/{id}", s.auth(s.handleStatus))
+	mux.HandleFunc("GET /jobs-changes", s.auth(s.handleChanges))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
 
 	log.Printf("vela-worker up on %s (model=%s, holodex=%s)", cfg.Addr, cfg.Model, cfg.HolodexURL)
 	log.Fatal(http.ListenAndServe(cfg.Addr, mux))
+}
+
+// handleChanges is the board's ping-back channel, NAT-inverted: the board
+// parks one outbound long-poll here, and any job transition answers it
+// immediately. `since` is the last seq the caller saw; `wait` seconds bounds
+// the park. Empty answer = nothing changed, re-poll.
+func (s *server) handleChanges(w http.ResponseWriter, r *http.Request) {
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	wait, _ := strconv.Atoi(r.URL.Query().Get("wait"))
+	if wait <= 0 || wait > 55 {
+		wait = 55
+	}
+	deadline := time.Now().Add(time.Duration(wait) * time.Second)
+
+	for {
+		s.store.mu.Lock()
+		var changed []buildJob
+		for _, j := range s.store.jobs {
+			if j.Seq > since {
+				jj := *j
+				jj.QueuePos = s.store.queuePosLocked(j)
+				changed = append(changed, jj)
+			}
+		}
+		cursor := s.store.seq
+		waiter := s.store.waiters
+		s.store.mu.Unlock()
+
+		if len(changed) > 0 {
+			writeJSON(w, http.StatusOK, map[string]any{"cursor": cursor, "jobs": changed})
+			return
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			writeJSON(w, http.StatusOK, map[string]any{"cursor": cursor, "jobs": []buildJob{}})
+			return
+		}
+		select {
+		case <-waiter: // something changed — loop and collect it
+		case <-time.After(remaining):
+		}
+	}
 }

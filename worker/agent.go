@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -166,6 +167,49 @@ THE LOOP THAT WORKS:
    - Never edit Gemfile.lock, bin/brakeman, or material_tokens.css.
    - Replace every template identity ("Application", example.com) with the
      product's own; the foundation config test asserts the stamped identity.
+2a1. CREATIVE CRAFT — how to design the centerpiece. Material Design owns the
+   chrome; these rules own the art. They are not optional taste, they are how
+   a drawing earns its name:
+   - SILHOUETTE FIRST. Before writing a single path, describe the object's
+     outline in words ("two triangles meeting at a point, framed by posts").
+     If the outline alone would not be named correctly by a stranger, the
+     drawing is wrong no matter how good the gradients are.
+   - DRAW THE REAL ANATOMY. Name the 3-5 defining features of the real thing
+     (an hourglass: glass bulbs, narrow neck, visible sand, frame; a die:
+     cube, pips, corner radius) and make every one visibly present. Missing
+     anatomy is why a drawing reads as "golden capsule" instead of hourglass.
+   - GEOMETRY BEFORE DECORATION. Get proportions and negative space right in
+     flat shapes first; gradients, highlights and texture come after the
+     silhouette reads, never instead of it.
+   - MATERIALS BEHAVE. Glass is transparent — things show through it. Sand
+     piles in a cone and leaves air above it. Liquid keeps a level. Metal
+     carries one bright specular line. Give every material at least one
+     physical truth.
+   - ONE LIGHT SOURCE. Pick a direction; every highlight and shadow obeys it.
+   - A SMALL PALETTE. 3-5 colors plus one accent. Darks are never pure black,
+     lights never pure white.
+   - ANIMATE THE STORY. Move the thing the app is about — sand falls, cards
+     flip, water ripples. Ease everything; nothing teleports.
+   - NEGATIVE SPACE IS PART OF THE DRAWING. Emptiness above the sand is what
+     says "draining".
+   - Give the centerpiece its OWN stylesheet and class namespace so the
+     framework's chrome styles cannot bleed into it.
+2a2. THE DESIGN LOOP — you have eyes; use them. After implementing any
+   visual centerpiece, call look with the page path and a pointed question
+   ("would a stranger call this an hourglass?"). The critique comes from a
+   vision model seeing the real render. REVISE and look again until the
+   verdict is SHIP — typically 2-3 rounds. Never verify an app with a visual
+   centerpiece without at least one SHIP verdict; shipping a centerpiece you
+   have never seen is how a capsule gets called an hourglass.
+2a3. THE CENTERPIECE IS YOURS. The foundation's Material Design 3 styling
+   governs the app chrome (nav, forms, buttons, layout, accessibility). The
+   creative heart of the app — a game, an animation, a timer face, a
+   visualization — is FREE-FORM: write custom CSS/SVG/canvas, make it
+   distinctive and genuinely beautiful, and do not assemble it from Material
+   tokens or cards. Also build ONLY what the spec asks for: a single-purpose
+   app gets no pricing page, no sign-up wall, no storefront — if such routes
+   or nav links exist in the fork and the spec does not need them, remove
+   them (and their tests' expectations) as part of the job.
 2b. EXPECT A RED SUITE ON ARRIVAL. The fork is identity-stamped (a real
    product domain in config/foundation.yml) but a handful of template tests
    still assert the old example.com identity — billing, checkout services,
@@ -191,6 +235,7 @@ func agentTools() []toolDef {
 		def("read_file", "Read one file from the workspace.", `{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`),
 		def("write_file", "Create or fully replace one file in the workspace. Send the COMPLETE file content.", `{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}`),
 		def("shell", "Run a bash command inside the workspace (max 10 minutes). Use for rg/grep, rubocop, brakeman, generators.", `{"type":"object","properties":{"command":{"type":"string"},"timeout_s":{"type":"integer"}},"required":["command"]}`),
+		def("look", "Boot the app's dev server, render a page in a real browser, and get an art director's critique of the screenshot from a vision model. Use after building any visual centerpiece; revise until the verdict is SHIP.", `{"type":"object","properties":{"path":{"type":"string","description":"page path, e.g. /"},"question":{"type":"string","description":"what to check, e.g. 'does the hourglass read as an hourglass?'"}},"required":["path","question"]}`),
 		def("run_tests", "Prepare the database and run the full Rails test suite locally. Fast feedback — use before every verify.", `{"type":"object","properties":{}}`),
 		def("commit_and_push", "Stage everything, commit with the message, and push to main.", `{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}`),
 		def("verify", "Run the authoritative Holodex verification of the pushed HEAD. Costs one ticket use; only call when local tests, rubocop and brakeman are green.", `{"type":"object","properties":{}}`),
@@ -211,4 +256,73 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// visionCritique shows a rendered screenshot to the vision model and returns
+// a craftsman's verdict. The coding model is blind; this is its eyes — the
+// text that comes back is what turns confident wrong geometry into revision.
+func (s *server) visionCritique(png []byte, context string) (string, error) {
+	if s.cfg.VisionModel == "" {
+		return "", fmt.Errorf("no WORKER_VISION_MODEL configured")
+	}
+	rubric := `You are reviewing a screenshot of a web app under construction. Be a ruthless art director, not a cheerleader.
+1) Say literally what you see, as a stranger would name it — do not use the intended name unless the image genuinely earns it.
+2) The creative centerpiece: would a stranger identify the intended object/scene from silhouette alone? If not, say what it actually reads as.
+3) List concrete flaws: proportions, silhouette, missing anatomy of the real object, material behavior (glass transparency, liquid levels, sand physics), lighting consistency, color balance, dead space.
+4) End with exactly one line: "VERDICT: SHIP" or "VERDICT: REVISE — " followed by the three highest-impact changes.
+
+Context from the build spec: ` + context
+
+	payload, err := json.Marshal(map[string]any{
+		"model":      s.cfg.VisionModel,
+		"max_tokens": 1400,
+		"reasoning":  map[string]any{"max_tokens": 2000},
+		"messages": []map[string]any{{
+			"role": "user",
+			"content": []map[string]any{
+				{"type": "text", "text": rubric},
+				{"type": "image_url", "image_url": map[string]string{
+					"url": "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
+				}},
+			},
+		}},
+	})
+	if err != nil {
+		return "", err
+	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		req, err := http.NewRequest(http.MethodPost, s.cfg.ModelURL+"/chat/completions", bytes.NewReader(payload))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Authorization", "Bearer "+s.cfg.ModelKey)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; vela-worker/1.0)")
+		client := &http.Client{Timeout: 90 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			lastErr = fmt.Errorf("vision model %d: %.300s", resp.StatusCode, body)
+			continue
+		}
+		var out struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal(body, &out) != nil || len(out.Choices) == 0 || strings.TrimSpace(out.Choices[0].Message.Content) == "" {
+			lastErr = fmt.Errorf("empty vision response")
+			continue
+		}
+		return out.Choices[0].Message.Content, nil
+	}
+	return "", lastErr
 }

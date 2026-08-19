@@ -340,6 +340,7 @@ func (b *Bot) Start() error {
 		return err
 	}
 	go b.watchGateway()
+	go b.watchWorkerJobs() // the build announcer (announcer.go)
 	return nil
 }
 func (b *Bot) Close() { _ = b.session.Close() }

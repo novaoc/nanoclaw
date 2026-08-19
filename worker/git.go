@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -163,4 +164,70 @@ func writeWorkspaceEnvNote(ws *workspace) {
 	// A tiny marker so a confused shell command has an obvious cwd sentinel;
 	// purely diagnostic, never read by the agent logic.
 	_ = os.WriteFile(ws.root+"/.vela-workspace", []byte(ws.repo+"\n"), 0o644)
+}
+
+// rescuePush commits everything in a failed job's workspace to a wip branch
+// so no work is ever lost to the workspace cleanup — the sandclock build died
+// holding a green suite that existed nowhere else. Best effort: an untouched
+// tree returns without a branch.
+func (s *server) rescuePush(ws *workspace, id string) (string, error) {
+	if _, err := os.Stat(filepath.Join(ws.root, ".git")); err != nil {
+		return "", nil // clone never happened
+	}
+	before, _ := s.headSHA(ws)
+	sha, err := s.commitAll(ws, "WIP: rescued from failed build job "+id)
+	if err != nil {
+		return "", err
+	}
+	if sha == before {
+		// No local commits beyond origin? Check whether HEAD is already
+		// pushed: if origin/main == HEAD there is nothing to rescue.
+		if out, oerr := gitRun(ws.root, "", "rev-parse", "origin/main"); oerr == nil && strings.TrimSpace(out) == sha {
+			return "", nil
+		}
+	}
+	branch := "wip-" + id
+	url := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", s.cfg.GitHubToken, ws.repo)
+	if out, err := gitRun(ws.root, "", "push", url, "HEAD:refs/heads/"+branch); err != nil {
+		return "", fmt.Errorf("rescue push failed: %s", scrub(out, s.cfg.GitHubToken))
+	}
+	return branch, nil
+}
+
+// ticketDeploy ships a verified build using the single-use deploy ticket
+// granted at enqueue. The worker holds no build secret; this grant — bound to
+// one repo, one use, and a receipt proving the tested bytes — is the whole of
+// its deploy authority.
+func (s *server) ticketDeploy(job *buildJob, sha, receipt string) (string, error) {
+	req, err := http.NewRequest(http.MethodPost, s.cfg.HolodexURL+"/api/deploy/ref", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.cfg.HolodexToken)
+	req.Header.Set("X-Holodex-Repo", job.Repo)
+	req.Header.Set("X-Holodex-Sha", sha)
+	req.Header.Set("X-Holodex-Name", job.Name)
+	req.Header.Set("X-Holodex-Dockerfile", "Dockerfile")
+	req.Header.Set("X-Holodex-Port", fmt.Sprintf("%d", job.Port))
+	req.Header.Set("X-Holodex-Exp", fmt.Sprintf("%d", time.Now().Add(30*time.Minute).Unix()))
+	req.Header.Set("X-Holodex-Verify", receipt)
+	req.Header.Set("X-Holodex-Deploy-Ticket", job.deployTicket)
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("deploy %d: %.400s", resp.StatusCode, body)
+	}
+	var out struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.URL == "" {
+		return "", fmt.Errorf("deploy answered without a url: %.200s", body)
+	}
+	return out.URL, nil
 }

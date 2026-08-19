@@ -31,7 +31,8 @@ RUN apt-get update -qq && \
       build-essential git curl ca-certificates \
       libpq-dev libvips libyaml-dev pkg-config \
       postgresql postgresql-client \
-      nodejs npm ripgrep && \
+      nodejs npm ripgrep \
+      chromium fonts-liberation && \
     rm -rf /var/lib/apt/lists/*
 
 # The worker daemon starts postgres per job via `service postgresql start`

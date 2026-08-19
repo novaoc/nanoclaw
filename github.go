@@ -90,13 +90,21 @@ func (tc *ToolCtx) runGithub(a toolArgs) string {
 		// Shaping is mechanical and must not depend on the model calling a
 		// separate step: stamp identity, write app README, omit unselected modules.
 		shapeOut := gh.shapeGeneratedApp(a.Name, tc.appSpec, tc.cfg)
-		// When the build worker is configured, the hand-off is not optional.
-		// Without this line the model sometimes built inline out of habit
-		// (2026-08-18: a whole roguelike written file-by-file on the board
-		// while the worker sat idle) — the tool result is the strongest
-		// steering surface we have, so the routing lives here.
+		// The tool result is the strongest steering surface we have, so the
+		// routing lives here. Brain-era wording ("the worker codes") once
+		// made the model enqueue the untouched scaffold 20 seconds after
+		// creating it (2026-08-19) — the worker is deterministic now and
+		// deploys exactly what was pushed, so the implementation must happen
+		// HERE, before the hand-off. The scaffold tip is remembered so
+		// enqueue_build can refuse a no-work hand-off outright.
 		if tc.cfg.WorkerEnabled() {
-			return out + "\n" + shapeOut + "\n\nNEXT STEP (required on this instance): call enqueue_build with this repo, the app name, and the request context. Do NOT implement the product yourself with put_file/patch_file, and do NOT call verify_repo — the worker codes, tests, and verifies; the deploy is automatic after it passes. Your only remaining job here is enqueue_build, then tell the requester the build is underway."
+			if sha, err := gh.headSHA(a.Name, ""); err == nil {
+				if tc.scaffoldTip == nil {
+					tc.scaffoldTip = map[string]string{}
+				}
+				tc.scaffoldTip[sha] = a.Name
+			}
+			return out + "\n" + shapeOut + "\n\nNEXT STEPS (required on this instance): IMPLEMENT THE PRODUCT NOW, yourself, in this repo — put_file/patch_file every file the request needs (models, migrations, controllers, views, tests, styles), matching the app_spec. When the implementation is committed and pushed, call enqueue_build with this repo and the app name: the worker verifies your pushed commit on Holodex and deploys it automatically, posting the live URL in this thread. Never call verify_repo/deploy_repo yourself, and never enqueue before the app is written — the worker writes no code, so a bare scaffold would ship as an empty app. STYLE: verification runs rubocop-rails-omakase and lint failures fail the build — write double-quoted strings and put spaces inside array literals ([ :a, :b ], not [:a, :b]). COMPONENTS: use the md_* view helpers (md_button, md_text_field(form, :attr, label:, type: :textarea for multi-line), md_select, md_card, md_chip…) — never render foundation/components/_ partials directly; the helpers supply the locals the partials need."
 		}
 		return out + "\n" + shapeOut
 	case "shape":
@@ -765,6 +773,42 @@ func (g *ghClient) patchFile(repo, path string, ops []patchOp, message, branch s
 	}
 	add, del := lineDiffCounts(old, next)
 	return fmt.Sprintf("patched %s: %d ops (+%d -%d lines)", path, len(ops), add, del)
+}
+
+// headSHA resolves the current tip of a repository's default branch (or the
+// given ref) to its full 40-hex commit. The deterministic worker refuses jobs
+// without a pinned sha — "deploy whatever main happens to be by the time the
+// queue drains" is exactly the ambiguity the reference-deploy design removes.
+func (g *ghClient) headSHA(repo, ref string) (string, error) {
+	owner, name, err := g.resolveRepo(repo)
+	if err != nil {
+		return "", err
+	}
+	if ref == "" {
+		info, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s", owner, name), nil)
+		if err != nil {
+			return "", err
+		}
+		if st >= 400 {
+			return "", errors.New(ghErr(info, st))
+		}
+		ref, _ = info["default_branch"].(string)
+		if ref == "" {
+			ref = "main"
+		}
+	}
+	commit, st, err := g.do("GET", fmt.Sprintf("/repos/%s/%s/commits/%s", owner, name, url.PathEscape(ref)), nil)
+	if err != nil {
+		return "", err
+	}
+	if st >= 400 {
+		return "", errors.New(ghErr(commit, st))
+	}
+	sha, _ := commit["sha"].(string)
+	if len(sha) != 40 {
+		return "", fmt.Errorf("GitHub did not resolve %s to a commit", ref)
+	}
+	return sha, nil
 }
 
 // downloadArchive resolves ref to an immutable commit SHA, then downloads the

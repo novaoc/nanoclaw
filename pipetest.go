@@ -13,6 +13,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -81,6 +82,9 @@ func runPipeTest() {
 	suffix := make([]byte, 3)
 	_, _ = rand.Read(suffix)
 	appName := "probe-" + hex.EncodeToString(suffix)
+	// A mapping left by an earlier pipetest would defeat the exactly-one-job
+	// check below; every run starts from a clean slate.
+	_ = os.Remove(workerJobsPath(cfg))
 
 	stub := &pipeDisc{posts: make(chan string, 64)}
 	agent := NewAgent(cfg)
@@ -104,54 +108,116 @@ func runPipeTest() {
 	if strings.Contains(reply.Text, "⚠️") {
 		pipeFail("turn", "model error surfaced: "+reply.Text)
 	}
-	// The hand-off must be fast — a turn that grinds for 20+ minutes means
-	// the worker routing failed and she built inline again.
-	if turnDur > 12*time.Minute {
-		pipeFail("turn", fmt.Sprintf("turn took %s — inline building suspected, hand-off routing failed", turnDur))
+	// The turn now legitimately contains the implementation (Vela writes the
+	// app; the worker only verifies and deploys), so a long turn is work, not
+	// a routing failure. The ceiling only catches a turn that never ends.
+	if turnDur > 35*time.Minute {
+		pipeFail("turn", fmt.Sprintf("turn took %s — runaway turn", turnDur))
 	}
 
-	// The poller goroutine (started by enqueue_build) now narrates through the
-	// stub. Wait for the terminal post.
-	fmt.Println("STAGE worker: waiting for verification and deploy…")
-	deadline := time.After(40 * time.Minute)
-	for {
-		select {
-		case <-deadline:
-			pipeFail("worker", "no terminal post within 40 minutes")
-		case post := <-stub.posts:
-			switch {
-			case strings.Contains(post, "❌"):
-				pipeFail("worker", post)
-			case strings.Contains(post, "didn't return a deploy receipt"),
-				strings.Contains(post, "Deploy hit an error"),
-				strings.Contains(post, "deploy path wasn't available"):
-				pipeFail("deploy", post)
-			case strings.HasPrefix(post, "🚀"):
-				url := ""
-				for _, f := range strings.Fields(post) {
-					if strings.HasPrefix(f, "https://") {
-						url = f
-						break
-					}
-				}
-				if url == "" {
-					pipeFail("deploy", "deploy post carried no URL: "+post)
-				}
-				fmt.Printf("STAGE deploy: %s\n", url)
-				time.Sleep(10 * time.Second) // container boot grace
-				client := &http.Client{Timeout: 45 * time.Second}
-				resp, err := client.Get(url)
-				if err != nil {
-					pipeFail("http", err.Error())
-				}
-				resp.Body.Close()
-				if resp.StatusCode != 200 {
-					pipeFail("http", fmt.Sprintf("GET %s = %d", url, resp.StatusCode))
-				}
-				fmt.Printf("STAGE http: 200 OK\n\nPIPETEST PASS app=%s total=%s\n",
-					appName, time.Since(turnStart).Round(time.Second))
-				os.Exit(0)
+	// In production a Bot goroutine (watchWorkerJobs) turns the worker's
+	// change feed into thread posts, and a failed verification triggers one
+	// bounded repair turn. Pipetest has no Bot, so it walks the same road by
+	// hand: follow the enqueued job; on failure, feed Vela the distilled
+	// failure exactly as the announcer would and follow her re-enqueued job.
+	jobs := loadWorkerJobs(cfg)
+	if len(jobs) != 1 {
+		pipeFail("enqueue", fmt.Sprintf("expected exactly 1 remembered worker job, found %d — enqueue_build was not reached (or ran twice)", len(jobs)))
+	}
+	jobID, repo := "", ""
+	for id, n := range jobs {
+		jobID, repo = id, n.Repo
+	}
+	fmt.Printf("STAGE worker: following job %s…\n", jobID)
+	state, detail, url := followWorkerJob(cfg, jobID, 40*time.Minute)
+
+	if state == "failed" {
+		fmt.Printf("STAGE repair: first verification failed — running the repair turn\n%s\n", detail)
+		before := map[string]bool{jobID: true}
+		fixStart := time.Now()
+		fixReply := agent.HandleTurn(Turn{
+			ChannelID: "pipetest", AuthorID: coder, Author: "build-repair",
+			Notify:       func(s string) { fmt.Printf("[notify] %s\n", s) },
+			SetBuildName: func(s string) {},
+		}, repairTurnContent(appName, repo, detail))
+		fmt.Printf("STAGE repair turn: ended in %s\nreply: %.300s\n", time.Since(fixStart).Round(time.Second), fixReply.Text)
+		jobID = ""
+		for id := range loadWorkerJobs(cfg) {
+			if !before[id] {
+				jobID = id
 			}
+		}
+		if jobID == "" {
+			pipeFail("repair", "the repair turn did not re-enqueue a build")
+		}
+		fmt.Printf("STAGE worker: following repaired job %s…\n", jobID)
+		state, detail, url = followWorkerJob(cfg, jobID, 40*time.Minute)
+	}
+
+	switch state {
+	case "failed":
+		pipeFail("worker", detail)
+	case "verified":
+		pipeFail("deploy", "stopped at verified — deploy ticket missing or deploy failed: "+detail)
+	case "deployed":
+		// fall through to the URL check below
+	default:
+		pipeFail("worker", "job ended in unexpected state "+state)
+	}
+	if url == "" {
+		pipeFail("deploy", "deployed without a URL")
+	}
+	fmt.Printf("STAGE deploy: %s\n", url)
+	time.Sleep(10 * time.Second) // container boot grace
+	client := &http.Client{Timeout: 45 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		pipeFail("http", err.Error())
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		pipeFail("http", fmt.Sprintf("GET %s = %d", url, resp.StatusCode))
+	}
+	fmt.Printf("STAGE http: 200 OK\n\nPIPETEST PASS app=%s total=%s\n",
+		appName, time.Since(turnStart).Round(time.Second))
+	os.Exit(0)
+}
+
+// followWorkerJob polls one worker job until it reaches a terminal state
+// (failed | verified | deployed) or the deadline passes.
+func followWorkerJob(cfg *Config, jobID string, budget time.Duration) (state, detail, url string) {
+	deadline := time.Now().Add(budget)
+	lastDetail := ""
+	client := &http.Client{Timeout: 45 * time.Second}
+	for {
+		if time.Now().After(deadline) {
+			pipeFail("worker", "job not terminal within "+budget.String())
+		}
+		time.Sleep(10 * time.Second)
+		req, _ := http.NewRequest(http.MethodGet, cfg.WorkerURL+"/jobs/"+jobID, nil)
+		req.Header.Set("Authorization", "Bearer "+cfg.WorkerToken)
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Printf("[poll] %v\n", err)
+			continue
+		}
+		var st struct {
+			State  string `json:"state"`
+			Detail string `json:"detail"`
+			URL    string `json:"url"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&st)
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		if st.Detail != lastDetail {
+			fmt.Printf("[job %s] %s | %s\n", time.Now().Format("15:04:05"), st.State, st.Detail)
+			lastDetail = st.Detail
+		}
+		switch st.State {
+		case "failed", "verified", "deployed":
+			return st.State, st.Detail, st.URL
 		}
 	}
 }

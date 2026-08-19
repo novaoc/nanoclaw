@@ -30,6 +30,9 @@ type workerJobNote struct {
 	Repo    string `json:"repo"`
 	// LastState dedups announcements across restarts and feed replays.
 	LastState string `json:"last_state,omitempty"`
+	// Attempts counts failed verifications already spent on this build, so
+	// the auto-fix loop is bounded: one repair turn, then the honest ❌.
+	Attempts int `json:"attempts,omitempty"`
 }
 
 var workerJobsMu sync.Mutex
@@ -106,6 +109,72 @@ func (b *Bot) watchWorkerJobs() {
 
 func atomicLoadDraining(b *Bot) bool { return atomic.LoadInt32(&b.draining) != 0 }
 
+// repairTurnContent is the synthetic turn fed to Vela after a failed
+// verification — shared by the live announcer and pipetest so the self-test
+// exercises the exact repair path production runs.
+func repairTurnContent(name, repo, detail string) string {
+	return fmt.Sprintf(
+		"SYSTEM REPAIR TURN (not a user message): your build %q (repo %s) failed Holodex verification. "+
+			"The distilled failure output is below. Read ONLY the files named in the failures, apply the "+
+			"smallest fix with put_file/patch_file, then call enqueue_build again with the same repo and name. "+
+			"THE TURN IS NOT DONE UNTIL enqueue_build HAS BEEN CALLED — a diagnosis without a re-enqueue is a "+
+			"failed turn, and there is no one else to act on your analysis. Do not tour the repo, do not "+
+			"re-read passing code, do not start over, do not create a new repo. Fix → push → enqueue_build.\n\n%s",
+		name, repo, detail)
+}
+
+// runFixTurn gives Vela one bounded repair turn after a failed verification.
+// She reads the distilled failure, fixes the repo through her normal tools,
+// and re-enqueues; the fresh job inherits attempts=1 so a second failure ends
+// in the honest ❌ instead of a loop.
+func (b *Bot) runFixTurn(note workerJobNote, j workerFeedJob) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("fix turn panic: %v", r)
+		}
+	}()
+	coder := ""
+	for id := range b.cfg.Coders {
+		coder = id
+		break
+	}
+	if coder == "" {
+		return
+	}
+	release, _ := b.takeLane(coder, "fix:"+note.Name, 0, 0)
+	defer release()
+
+	content := repairTurnContent(note.Name, note.Repo, j.Detail)
+	reply := b.agent.HandleTurn(Turn{
+		ChannelID: note.Channel,
+		AuthorID:  coder,
+		Author:    "build-repair",
+		Notify:    func(s string) { _, _ = b.PostMessage(note.Channel, s) },
+		SetBuildName: func(s string) {
+			if b.build != nil {
+				b.build.setName(s)
+			}
+		},
+	}, content)
+	if strings.TrimSpace(reply.Text) != "" {
+		_, _ = b.PostMessage(note.Channel, reply.Text)
+	}
+	// The repair turn's enqueue_build wrote a fresh mapping entry for this
+	// repo; stamp the spent attempt on it so the loop stays bounded.
+	m := loadWorkerJobs(b.cfg)
+	changed := false
+	for id, n := range m {
+		if strings.EqualFold(n.Repo, note.Repo) && n.Attempts <= note.Attempts {
+			n.Attempts = note.Attempts + 1
+			m[id] = n
+			changed = true
+		}
+	}
+	if changed {
+		saveWorkerJobs(b.cfg, m)
+	}
+}
+
 func (b *Bot) fetchWorkerChanges(cursor int64) ([]workerFeedJob, int64, error) {
 	url := fmt.Sprintf("%s/jobs-changes?since=%d&wait=55", b.cfg.WorkerURL, cursor)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -160,6 +229,22 @@ func (b *Bot) announceWorkerJobs(jobs []workerFeedJob) {
 			detail := j.Detail
 			if i := strings.IndexByte(detail, '\n'); i >= 0 {
 				detail = detail[:i]
+			}
+			if note.Attempts < 1 {
+				// Vela codes without a local test run (a 256MB board can't
+				// hold a Rails suite), so the first verification failure is
+				// part of the loop, not the end of it: hand her the distilled
+				// failure once and let her repair and re-enqueue. One bounded
+				// attempt — after that the ❌ is honest.
+				msg = "🔧 " + note.Name + " failed verification — reading the failure and fixing it now."
+				if _, err := b.PostMessage(note.Channel, msg); err != nil {
+					log.Printf("announcer post %s: %v", j.ID, err)
+					continue
+				}
+				go b.runFixTurn(note, j)
+				delete(m, j.ID)
+				changed = true
+				continue
 			}
 			msg = "❌ " + note.Name + " didn't make it: " + detail + "\nWork-in-progress is preserved on GitHub — I can pick it up from here if you want."
 		case "verified":

@@ -37,6 +37,10 @@ type ToolCtx struct {
 	repoReads int          // focused GitHub inspection calls; bounded to prevent analysis loops
 	ghCache   *ghRepoCache // turn-scoped GitHub tree/blob cache for remote search
 	appSpec   *AppSpec     // structured build specification for the current turn/job
+	// scaffoldTip records {commit sha → repo} at the moment create_rails_app
+	// finished shaping, so enqueue_build can refuse to ship a repo whose tip
+	// is still the untouched scaffold (the worker writes no code).
+	scaffoldTip map[string]string
 	// notify posts a mid-turn status message (supplied by Discord). Nil in eval.
 	notify func(text string)
 	// setBuildName updates the build-lane label while a coder turn runs (so
@@ -216,7 +220,7 @@ func toolDefs(cfg *Config) []ToolDef {
 					`{"type":"object","properties":{"repo":{"type":"string"},"name":{"type":"string","description":"app/display name"},"ref":{"type":"string","description":"exact commit SHA returned by verify_repo"},"receipt":{"type":"string","description":"signed receipt returned by verify_repo"},"port":{"type":"integer","description":"listen port; otherwise root Dockerfile EXPOSE or 8080"}},"required":["repo","name","ref","receipt"]}`))
 			if cfg.WorkerEnabled() {
 				defs = append(defs, mk("enqueue_build",
-					"PREFERRED for building an app: hand the freshly forked repo to the build worker and return immediately, so you stay free to talk and take other requests while it works. The worker clones the repo, implements the spec, runs the foundation test suite locally, pushes commits, and verifies on Holodex; it posts progress in this thread and you deploy automatically when it passes. Use AFTER app_spec + create_rails_app have made the fork. Args: repo (owner/name), name (app/display name), instructions (any product detail the worker should honor), port (optional). Do NOT then call verify_repo/deploy_repo yourself — the worker and the auto-deploy handle it.",
+					"REQUIRED final step of every build: hand your finished, pushed implementation to the deploy worker and return immediately. The worker pins the current tip of the repo, verifies that exact commit on Holodex, and deploys it automatically — progress and the live URL are posted in this thread without you. Use AFTER app_spec + create_rails_app + your own focused edits are committed and pushed; the worker writes no code, so enqueue only when the app is done. Args: repo (owner/name), name (app/display name), instructions (context recorded with the job), port (optional). Do NOT then call verify_repo/deploy_repo yourself.",
 					`{"type":"object","properties":{"repo":{"type":"string"},"name":{"type":"string"},"instructions":{"type":"string","description":"product detail and constraints for the worker"},"port":{"type":"integer"}},"required":["repo","name"]}`))
 			}
 		}

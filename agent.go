@@ -821,7 +821,7 @@ func (a *Agent) run(t Turn, content string, toolIters, passes int) Reply {
 	if a.cfg.WorkerEnabled() {
 		sys = strings.Replace(sys,
 			"the house flow is app_spec → create_rails_app\n  (auto-shapes identity, README, module omission — do not call shape separately)\n  → focused\n  edits → verify_repo → deploy_repo → hand back BOTH the public repo and live",
-			"the house flow is app_spec → create_rails_app\n  (auto-shapes identity, README, module omission — do not call shape separately)\n  → enqueue_build, which hands the entire implementation to the build worker\n  and ENDS your part. Never implement a requested product inline with\n  put_file/patch_file and never call verify_repo/deploy_repo yourself when\n  the worker exists — it codes, tests, verifies, and the deploy happens\n  automatically. After enqueue_build, hand back BOTH the public repo and live",
+			"the house flow is app_spec → create_rails_app\n  (auto-shapes identity, README, module omission — do not call shape separately)\n  → focused edits (put_file/patch_file — YOU implement and design the app,\n  every file of it) → enqueue_build, which pins your pushed commit and hands\n  verification + deploy to the build worker, ENDING your part. Never call\n  verify_repo/deploy_repo yourself when the worker exists — verification and\n  the deploy happen automatically and the thread is told the moment the demo\n  is live. After enqueue_build, hand back BOTH the public repo and live",
 			1)
 	}
 	// 2.0 social context: who this person is to Vela, and how this channel

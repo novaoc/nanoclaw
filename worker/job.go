@@ -5,11 +5,8 @@ package main
 // final state for the board's poller.
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -43,321 +40,66 @@ func (s *server) runJob(id string) {
 		s.store.mu.Unlock()
 		return
 	}
-	repo, name := job.Repo, job.Name
-	spec, instructions := job.spec, job.instructions
+	repo, sha := job.Repo, job.SHA
 	s.store.mu.Unlock()
 
-	ws := &workspace{root: filepath.Join(s.cfg.Data, id), repo: repo}
-	defer func() {
-		// A failed job must not vaporise the work: the sandclock build died
-		// with a green suite that existed only in this directory, while the
-		// failure message told the requester the code was on GitHub. Push
-		// whatever exists to a rescue branch before cleanup.
-		s.store.mu.Lock()
-		state := ""
-		if j := s.store.jobs[id]; j != nil {
-			state = j.State
-		}
-		s.store.mu.Unlock()
-		s.stopPreview(id)
-		if state == "failed" {
-			if branch, err := s.rescuePush(ws, id); err == nil && branch != "" {
-				log.Printf("job %s: rescued work-in-progress to %s", id, branch)
-				s.store.update(id, func(j *buildJob) {
-					j.Detail += " — work-in-progress saved to branch " + branch
-				})
-			}
-		}
-		_ = os.RemoveAll(ws.root)
-	}()
-	if err := os.MkdirAll(ws.root, 0o755); err != nil {
-		s.fail(id, "workspace: "+err.Error())
+	// Deterministic pipeline — no model anywhere. The worker used to carry a
+	// full coding agent, and every single production failure came from that
+	// brain (empty completions, design loops, budget deaths) while the dumb
+	// half worked every time. 2026-08-19: the brain was removed on request —
+	// "just deploy shit and that's all." Vela writes the code; this verifies
+	// and ships it.
+	if sha == "" {
+		s.fail(id, "no sha provided — the board resolves HEAD at enqueue")
 		return
 	}
 
-	s.store.update(id, func(j *buildJob) { j.State = "coding"; j.Detail = "cloning " + repo })
-	if err := s.cloneRepo(ws); err != nil {
-		s.fail(id, err.Error())
+	s.store.update(id, func(j *buildJob) {
+		j.State = "verifying"
+		j.Detail = "Holodex verification of " + sha[:12]
+	})
+	snap := s.snapshot(id)
+	res, err := s.ticketVerify(snap, sha)
+	if err != nil {
+		s.fail(id, "verification error: "+firstLine(err.Error()))
 		return
 	}
-	writeWorkspaceEnvNote(ws)
-
-	// Install the app's gems before the agent starts. Without this every
-	// run_tests dies instantly in bundler ("Could not find rails … in locally
-	// installed gems") and the model has no way to diagnose it. Gems land in
-	// the shared BUNDLE_PATH, so later jobs on the same container reuse them
-	// and this is only slow the first time.
-	s.store.update(id, func(j *buildJob) { j.Detail = "installing gems" })
-	started := time.Now()
-	if out, err := ws.runShell("bundle install 2>&1 | tail -30", 15*time.Minute); err != nil {
-		s.fail(id, "bundle install failed: "+tailOf(out, 2000))
+	s.store.update(id, func(j *buildJob) { j.VerifiesUsed++ })
+	if !res.OK {
+		// Distilled, not raw: the board feeds this detail straight into
+		// Vela's repair turn, and minitest failure blocks are signal while
+		// docker build noise is not.
+		s.fail(id, "verification FAILED: "+res.Error+"\n"+distillMinitest(res.Logs, 1500))
 		return
 	}
-	log.Printf("job %s: gems ready in %s", id, time.Since(started).Round(time.Second))
+	s.store.update(id, func(j *buildJob) {
+		j.Receipt = res.Receipt
+		j.Detail = fmt.Sprintf("verification passed (%d files, %.0fs)", res.Files, float64(res.DurationMS)/1000)
+	})
 
-	messages := []chatMsg{
-		{Role: "system", Content: workerSystemPrompt},
-		{Role: "user", Content: fmt.Sprintf(
-			"Repository: %s (already cloned into your workspace)\nApp name: %s\n\nSpecification:\n%s\n\nRequest context from the person who asked:\n%s",
-			repo, name, spec, instructions)},
+	if snap.deployTicket == "" {
+		s.store.update(id, func(j *buildJob) { j.State = "verified"; j.Detail += " — no deploy grant" })
+		return
 	}
-	tools := agentTools()
-	deadline := time.Now().Add(jobWallClock)
-	reads := 0
-	lastProgress := 0 // iteration of the most recent progress event
-
-	for iter := 0; iter < maxToolIterations; iter++ {
-		if time.Now().After(deadline) {
-			s.fail(id, fmt.Sprintf("job wall clock (%s) exceeded", jobWallClock))
-			return
-		}
-		if iter-lastProgress > maxStagnantIters {
-			s.fail(id, fmt.Sprintf("no progress for %d iterations — the loop was circling, not building", maxStagnantIters))
-			return
-		}
-		msg, err := s.chat(messages, tools)
-		if err != nil {
-			s.fail(id, "model error: "+err.Error())
-			return
-		}
-		messages = append(messages, msg)
-		if len(msg.ToolCalls) == 0 {
-			// A bare text turn — nudge back into the loop rather than dying.
-			log.Printf("job %s iter %d: no tool calls (%.80q)", id, iter, msg.Content)
-			messages = append(messages, chatMsg{Role: "user",
-				Content: "Continue with tool calls. When finished, call done."})
-			continue
-		}
-
-		finished := false
-		for _, call := range msg.ToolCalls {
-			// Reading is cheap and therefore seductive: a model will happily
-			// tour a 300-file Rails app forever. Count consecutive read-only
-			// calls and cut the tour off once it has plenty of context —
-			// Vela's board learned the same lesson and calls it
-			// INSPECTION_COMPLETE.
-			switch call.Function.Name {
-			case "list_tree", "read_file", "shell":
-				reads++
-			default:
-				reads = 0 // write/test/look/commit/verify all reset the tour counter
-			}
-			// Past twice the budget the guard stops asking and starts
-			// refusing: the soft nudge alone was ignored for 30 straight
-			// minutes of exploration on 2026-08-16. Progress tools
-			// (write_file, run_tests, commit, verify, done) reset it.
-			if reads > 2*maxConsecutiveReads {
-				messages = append(messages, toolResultMsg(call.ID, call.Function.Name,
-					"REFUSED: read budget exhausted. Only write_file, run_tests, commit_and_push, verify, report and done are accepted until you make progress."))
-				continue
-			}
-			started := time.Now()
-			result := s.execTool(id, ws, call)
-			// The sandclock run died at iter 59 while inspecting its diff —
-			// green suite, nothing pushed, no idea the end was near. Make the
-			// remaining budget explicit, and steer straight to the finish the
-			// moment the suite passes.
-			// Progress = anything that moves the build forward. Writes, suite
-			// runs, commits, verifies, and reports all count; reads and ad-hoc
-			// shell do not.
-			switch call.Function.Name {
-			case "write_file", "run_tests", "commit_and_push", "verify", "report", "done", "look":
-				lastProgress = iter
-			}
-			if left := time.Until(deadline); left < 12*time.Minute {
-				result += fmt.Sprintf("\n\nDEADLINE: %s of wall clock remain. If the suite is green, commit_and_push and verify NOW — an unpushed green build counts as a total failure.", left.Round(time.Minute))
-			}
-			if strings.HasPrefix(result, "TESTS PASSED") {
-				result += "\n\nThe suite is green. Run rubocop and brakeman if you have not already, then commit_and_push and verify immediately. Do NOT run system/selenium tests — this container has no browser, and Holodex verification covers the full gate."
-			}
-			if reads >= maxConsecutiveReads {
-				result += "\n\nINSPECTION_COMPLETE: you have read enough of this repository. " +
-					"Stop exploring and start implementing with write_file now; run_tests will tell you what you still need to know."
-			}
-			// Without this the loop was completely opaque: a job could spend
-			// ten minutes exploring and look identical to one wedged on a
-			// clone. Every call is logged, and read-only calls still move the
-			// status line so pollers see life.
-			log.Printf("job %s iter %d: %s (%s) -> %.100q",
-				id, iter, call.Function.Name, time.Since(started).Round(time.Millisecond), firstLine(result))
-			s.store.update(id, func(j *buildJob) {
-				if j.State == "coding" {
-					j.Detail = "working: " + call.Function.Name
-				}
-			})
-			messages = append(messages, toolResultMsg(call.ID, call.Function.Name, result))
-			if call.Function.Name == "done" {
-				finished = true
-			}
-		}
-		if finished {
-			// State was set by the verify/done handlers; anything not
-			// verified by now is a failure with the agent's own summary.
-			s.store.mu.Lock()
-			if j := s.store.jobs[id]; j != nil && j.State != "verified" && j.State != "deployed" {
-				j.State = "failed"
-				j.Updated = time.Now()
-			}
-			s.store.mu.Unlock()
-			return
-		}
+	url, err := s.ticketDeploy(s.snapshot(id), sha, res.Receipt)
+	if err != nil {
+		s.store.update(id, func(j *buildJob) {
+			j.State = "verified"
+			j.Detail = "verified; deploy failed: " + firstLine(err.Error())
+		})
+		return
 	}
-	s.fail(id, "tool budget exhausted without done")
+	s.store.update(id, func(j *buildJob) {
+		j.State = "deployed"
+		j.URL = url
+		j.Detail = "live at " + url
+	})
+	log.Printf("job %s: deployed %s@%s at %s", id, repo, sha[:12], url)
 }
 
 func (s *server) fail(id, detail string) {
 	log.Printf("job %s failed: %s", id, firstLine(detail))
 	s.store.update(id, func(j *buildJob) { j.State = "failed"; j.Detail = detail })
-}
-
-func (s *server) execTool(id string, ws *workspace, call toolCall) string {
-	var args struct {
-		Path     string `json:"path"`
-		Content  string `json:"content"`
-		Command  string `json:"command"`
-		TimeoutS int    `json:"timeout_s"`
-		Message  string `json:"message"`
-		Summary  string `json:"summary"`
-		Question string `json:"question"`
-	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-		return "tool error: bad arguments: " + err.Error()
-	}
-
-	switch call.Function.Name {
-	case "list_tree":
-		out, err := ws.listTree(400)
-		if err != nil {
-			return "error: " + err.Error()
-		}
-		return out
-
-	case "read_file":
-		out, err := ws.readFile(args.Path)
-		if err != nil {
-			return "error: " + err.Error()
-		}
-		return out
-
-	case "write_file":
-		if err := ws.writeFile(args.Path, args.Content); err != nil {
-			return "error: " + err.Error()
-		}
-		return "wrote " + args.Path
-
-	case "shell":
-		timeout := 10 * time.Minute
-		if args.TimeoutS > 0 && args.TimeoutS <= 600 {
-			timeout = time.Duration(args.TimeoutS) * time.Second
-		}
-		out, err := ws.runShell(args.Command, timeout)
-		if err != nil {
-			return fmt.Sprintf("exit error: %v\n%s", err, out)
-		}
-		return out
-
-	case "run_tests":
-		s.store.update(id, func(j *buildJob) { j.Detail = "running the local test suite" })
-		out, err := ws.runTests()
-		if err != nil {
-			// The raw suite output runs to tens of kilobytes; dumping it into
-			// the transcript drowned the model. Keep the failure blocks and
-			// the summary line — the parts it can act on.
-			return "TESTS FAILED\n" + distillMinitest(out, 6000)
-		}
-		return "TESTS PASSED\n" + distillMinitest(out, 1500)
-
-	case "look":
-		s.store.update(id, func(j *buildJob) { j.Detail = "looking at the rendered page" })
-		if err := s.ensurePreview(id, ws); err != nil {
-			return "look error: " + err.Error()
-		}
-		png, err := s.screenshotPage(ws, args.Path)
-		if err != nil {
-			return "look error: " + err.Error()
-		}
-		context := args.Question
-		if snap := s.snapshot(id); snap != nil {
-			context = "App: " + snap.Name + ". " + tailOf(snap.instructions, 600) + "\nWhat the builder wants checked: " + args.Question
-		}
-		critique, err := s.visionCritique(png, context)
-		if err != nil {
-			return "look error: screenshot taken but the vision review failed: " + err.Error()
-		}
-		return fmt.Sprintf("LOOKED at %s (rendered in a real browser, %d KB screenshot). Art director's review:\n%s", args.Path, len(png)/1024, critique)
-
-	case "commit_and_push":
-		sha, err := s.commitAll(ws, args.Message)
-		if err != nil {
-			return "error: " + err.Error()
-		}
-		if err := s.push(ws); err != nil {
-			return "error: " + err.Error()
-		}
-		s.store.update(id, func(j *buildJob) { j.SHA = sha; j.Detail = "pushed " + sha[:12] })
-		return "pushed " + sha
-
-	case "verify":
-		sha, err := s.headSHA(ws)
-		if err != nil {
-			return "error: cannot resolve HEAD: " + err.Error()
-		}
-		s.store.update(id, func(j *buildJob) {
-			j.State = "verifying"
-			j.SHA = sha
-			j.VerifiesUsed++
-			j.Detail = "Holodex verification of " + sha[:12]
-		})
-		res, err := s.ticketVerify(s.snapshot(id), sha)
-		if err != nil {
-			s.store.update(id, func(j *buildJob) { j.State = "coding"; j.Detail = "verify error" })
-			return "verify error: " + err.Error()
-		}
-		if !res.OK {
-			s.store.update(id, func(j *buildJob) { j.State = "coding"; j.Detail = "verification failed" })
-			return fmt.Sprintf("Verification FAILED: %s\n%s", res.Error, tailOf(res.Logs, 6000))
-		}
-		s.store.update(id, func(j *buildJob) {
-			j.State = "verified"
-			j.Receipt = res.Receipt
-			j.Detail = fmt.Sprintf("verification passed (%d files, %.0fs)", res.Files, float64(res.DurationMS)/1000)
-		})
-		// The worker owns the whole lifecycle: with a deploy ticket granted at
-		// enqueue, ship the verified result immediately — no board watcher, no
-		// gap for an announcement to die in.
-		if snap := s.snapshot(id); snap.deployTicket != "" {
-			if url, derr := s.ticketDeploy(snap, sha, res.Receipt); derr != nil {
-				log.Printf("job %s: self-deploy failed: %v", id, derr)
-				s.store.update(id, func(j *buildJob) { j.Detail = "verified; deploy failed: " + firstLine(derr.Error()) })
-				return fmt.Sprintf("Verification PASSED for %s but the deploy failed (%s). Call done; the receipt is captured and the deploy can be retried.", sha[:12], firstLine(derr.Error()))
-			} else {
-				s.store.update(id, func(j *buildJob) {
-					j.State = "deployed"
-					j.URL = url
-					j.Detail = "live at " + url
-				})
-				return fmt.Sprintf("Verification PASSED and DEPLOYED: %s is live at %s. Call done with a short summary.", sha[:12], url)
-			}
-		}
-		return fmt.Sprintf("Verification PASSED for %s (receipt captured, %d files). Call done.", sha[:12], res.Files)
-
-	case "report":
-		s.store.update(id, func(j *buildJob) { j.Detail = args.Message })
-		return "noted"
-
-	case "done":
-		s.store.update(id, func(j *buildJob) {
-			if j.State == "verified" {
-				j.Detail = args.Summary
-			} else {
-				j.Detail = "gave up: " + args.Summary
-			}
-		})
-		return "finished"
-
-	default:
-		return "tool error: unknown tool " + call.Function.Name
-	}
 }
 
 func (s *server) snapshot(id string) *buildJob {
@@ -420,4 +162,11 @@ func distillMinitest(out string, budget int) string {
 		res = res[:budget] + "\n…[more failures truncated — fix these first]"
 	}
 	return res
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }

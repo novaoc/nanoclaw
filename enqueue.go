@@ -79,6 +79,20 @@ func (tc *ToolCtx) enqueueBuild(a toolArgs) string {
 		return "couldn't resolve " + repo + ": " + err.Error()
 	}
 	ownerRepo := owner + "/" + repoName
+	// Pin the exact commit being shipped. The worker is deterministic and
+	// refuses sha-less jobs: verification receipts and deploys are bound to
+	// one immutable commit, never to "whatever the branch says later".
+	sha, err := gh.headSHA(ownerRepo, "")
+	if err != nil {
+		return "couldn't resolve the tip of " + ownerRepo + ": " + err.Error() +
+			" — has the implementation been pushed?"
+	}
+	// The worker deploys exactly this commit and writes no code. If the tip
+	// is still the scaffold create_rails_app left, nothing has been built —
+	// refuse the hand-off instead of shipping an empty app.
+	if _, bare := tc.scaffoldTip[sha]; bare {
+		return "REFUSED: " + ownerRepo + " is still the untouched scaffold — no implementation has been pushed. Build the product first (put_file/patch_file the models, migrations, controllers, views, tests and styles the request needs, committed to main), then call enqueue_build again. The worker only verifies and deploys what you pushed."
+	}
 
 	job := newWorkerJobID()
 	exp := time.Now().Add(ticketTTL).Unix()
@@ -101,7 +115,7 @@ func (tc *ToolCtx) enqueueBuild(a toolArgs) string {
 		}
 	}
 	payload, _ := json.Marshal(map[string]any{
-		"job_id": job, "repo": ownerRepo, "name": name, "ticket": ticket,
+		"job_id": job, "repo": ownerRepo, "name": name, "sha": sha, "ticket": ticket,
 		"deploy_ticket": depTicket, "channel_id": tc.channelID,
 		"spec": spec, "instructions": strings.TrimSpace(a.Instructions), "port": a.Port,
 	})

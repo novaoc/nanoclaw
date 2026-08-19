@@ -484,8 +484,38 @@ func planShape(files map[string]string, spec *AppSpec, id AppIdentity, declared 
 	if err := applyIdentityAndREADME(work, spec, id); err != nil {
 		return nil, err
 	}
+	if spec != nil {
+		neutralizeHomePagePlaceholderTest(work)
+	}
 	diffShapePlan(plan, files, work)
 	return plan, nil
+}
+
+// The foundation home page is an explicit placeholder ("until the M7
+// marketing set replaces it") and HomePageTest asserts that placeholder's
+// content — capability chips, module sections. Every real product replaces
+// root, so with a spec present the test is rewritten at shape time to the one
+// assertion that stays true for any app: the root page renders. (2026-08-19:
+// a guestbook failed verification on four placeholder assertions about
+// [data-capability] markup it had legitimately replaced.)
+const homePageTestPath = "test/integration/home_page_test.rb"
+
+func neutralizeHomePagePlaceholderTest(work map[string]string) {
+	if _, ok := work[homePageTestPath]; !ok {
+		return
+	}
+	work[homePageTestPath] = `require "test_helper"
+
+# Replaced at shape time: this app owns the root page, so the foundation
+# placeholder's capability markup is gone by design. The app's own tests
+# describe what root actually does now.
+class HomePageTest < ActionDispatch::IntegrationTest
+  test "root page renders" do
+    get root_path
+    assert_response :success
+  end
+end
+`
 }
 
 // planIdentityOnly stamps foundation.yml + app README without omitting modules.
@@ -506,6 +536,9 @@ func planIdentityOnly(files map[string]string, spec *AppSpec, id AppIdentity, de
 	}
 	if err := applyIdentityAndREADME(work, spec, id); err != nil {
 		return nil, err
+	}
+	if spec != nil {
+		neutralizeHomePagePlaceholderTest(work)
 	}
 	diffShapePlan(plan, files, work)
 	return plan, nil
@@ -740,19 +773,61 @@ func stripCommentBlocks(text, name string) string {
 
 func collapseTaggedConditionals(text, name string) string {
 	n := regexp.QuoteMeta(name)
+	// When an if/else/end collapses to its else body, the body still carries
+	// the conditional's extra indent level — one column deeper than the code
+	// (and comments) around it. Rubocop's Layout cops flag exactly that
+	// (2026-08-19: a bare scaffold failed verification on the routes.rb root
+	// block), so the kept body is dedented to the if's own column.
+	unwrapElse := func(re *regexp.Regexp, text string) string {
+		return re.ReplaceAllStringFunc(text, func(match string) string {
+			sub := re.FindStringSubmatch(match)
+			return dedentTo(sub[2], sub[1])
+		})
+	}
 	// ERB if/else/end → else body
-	erbElse := regexp.MustCompile(`(?m)^[ \t]*<%[ \t]*if\b[^%]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*%>[ \t]*\n(?s:.*?)^[ \t]*<%[ \t]*else[ \t]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*%>[ \t]*\n((?s:.*?))^[ \t]*<%[ \t]*end[ \t]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*%>[ \t]*\n?`)
-	text = erbElse.ReplaceAllString(text, "$1")
+	erbElse := regexp.MustCompile(`(?m)^([ \t]*)<%[ \t]*if\b[^%]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*%>[ \t]*\n(?s:.*?)^[ \t]*<%[ \t]*else[ \t]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*%>[ \t]*\n((?s:.*?))^[ \t]*<%[ \t]*end[ \t]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*%>[ \t]*\n?`)
+	text = unwrapElse(erbElse, text)
 	// ERB if/end (no else) → remove
 	erbIf := regexp.MustCompile(`(?m)^[ \t]*<%[ \t]*if\b[^%]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*%>[ \t]*\n(?s:.*?)^[ \t]*<%[ \t]*end[ \t]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*%>[ \t]*\n?`)
 	text = erbIf.ReplaceAllString(text, "")
 	// Ruby if/else/end
-	rubyElse := regexp.MustCompile(`(?m)^[ \t]*if\b.*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*\n(?s:.*?)^[ \t]*else[ \t]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*\n((?s:.*?))^[ \t]*end[ \t]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*\n?`)
-	text = rubyElse.ReplaceAllString(text, "$1")
+	rubyElse := regexp.MustCompile(`(?m)^([ \t]*)if\b.*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*\n(?s:.*?)^[ \t]*else[ \t]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*\n((?s:.*?))^[ \t]*end[ \t]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*\n?`)
+	text = unwrapElse(rubyElse, text)
 	// Ruby if/end
 	rubyIf := regexp.MustCompile(`(?m)^[ \t]*if\b.*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*\n(?s:.*?)^[ \t]*end[ \t]*#[ \t]*foundation:module[ \t]+` + n + `[ \t]*\n?`)
 	text = rubyIf.ReplaceAllString(text, "")
 	return text
+}
+
+// dedentTo shifts body left so its least-indented non-blank line sits at
+// target's column, preserving relative indentation inside the body.
+func dedentTo(body, target string) string {
+	lines := strings.Split(body, "\n")
+	min := -1
+	for _, l := range lines {
+		t := strings.TrimLeft(l, " \t")
+		if t == "" {
+			continue
+		}
+		if ind := len(l) - len(t); min < 0 || ind < min {
+			min = ind
+		}
+	}
+	cut := min - len(target)
+	if min < 0 || cut <= 0 {
+		return body
+	}
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		j := 0
+		for j < cut && j < len(l) && (l[j] == ' ' || l[j] == '\t') {
+			j++
+		}
+		lines[i] = l[j:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func stripCSSPrefixLines(text string, patterns []string) string {
